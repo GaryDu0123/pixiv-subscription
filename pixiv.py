@@ -2,13 +2,11 @@ import base64
 import os
 import json
 import asyncio
-from asyncio import iscoroutinefunction
 from datetime import datetime, timedelta, timezone
-from functools import wraps
 from typing import Dict, List, Tuple
 import nonebot
 from hoshino import Service, priv
-from hoshino.typing import CQEvent, MessageSegment
+from hoshino.typing import CQEvent
 from pixivpy3 import AppPixivAPI
 from .config import PROXY_URL, MAX_DISPLAY_WORKS, IMAGE_QUALITY, CHECK_INTERVAL_HOURS
 import aiohttp
@@ -524,9 +522,9 @@ async def show_group_settings(bot, ev: CQEvent):
 
 @sv.on_prefix('pixiv强制检查')
 async def force_check_updates(bot, ev: CQEvent):
-    """强制执行一次更新检查 (仅管理员)"""
-    if not priv.check_priv(ev, priv.ADMIN):
-        await bot.send(ev, "只有群主或管理员才能强制检查更新")
+    """强制执行一次更新检查 (仅用于测试)"""
+    if not priv.check_priv(ev, priv.SUPERUSER):
+        await bot.send(ev, "只有超级用户才能强制检查更新")
         return
 
     await bot.send(ev, "开始检查画师更新，请稍候...")
@@ -558,7 +556,7 @@ async def construct_group_message(artist_name: str, filtered_illusts: List[Dict]
 
         msg_parts.append(f"\n📖 {title}")
         if tags:
-            msg_parts.append(f"\nTags: {', '.join(tags)}")
+            msg_parts.append(f"\n🏷️ {', '.join(tags)}")
 
         image_url = manager.get_image_urls(illust)
         if image_url:
