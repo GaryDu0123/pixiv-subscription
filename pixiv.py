@@ -17,6 +17,8 @@ import aiohttp
 PIXIV_REFRESH_TOKEN_PATH = os.path.join(os.path.dirname(__file__), 'refresh-token.json')
 PIXIV_SUBSCRIPTION_PATH = os.path.join(os.path.dirname(__file__), 'subscriptions.json')
 
+if IMAGE_QUALITY not in ['large', 'medium', 'square_medium', 'original']:
+    IMAGE_QUALITY = 'large'  # 默认值
 
 HELP_TEXT = """
 🎨 pixiv画师订阅插件
@@ -302,15 +304,26 @@ class PixivSubscriptionManager:
     @staticmethod
     def get_image_urls(illust: dict) -> str:
         """
-        获取作品的所有图片URL（处理单页和多页作品）
+        获取作品的图片URL, 无论是单图还是多图都是返回第一张图的URL
         todo 如果需要找原图, 需要去meta_pages里找
         """
         url = ""
-
-        # 单页作品
+        # 单独处理原图的请求
+        if IMAGE_QUALITY == 'original':
+            # 尝试获取原图
+            # 单图会在meta_single_page里
+            if not url and 'meta_single_page' in illust and illust['meta_single_page']:
+                url = illust['meta_single_page'].get('original_image_url', "")
+            # 多图会在meta_pages里
+            if 'meta_pages' in illust and illust['meta_pages']:
+                url = illust['meta_pages'][0]['image_urls'].get('original', "")
+            if not url:
+                # 回退到large
+                url = illust['image_urls'].get('large', "")
+            return url
+        # 其他清晰度
         if 'image_urls' in illust:
             url = illust['image_urls'].get(IMAGE_QUALITY)
-
         return url
 
     @staticmethod
@@ -617,7 +630,7 @@ async def check_updates():
 
                     await bot.send_group_msg(
                         group_id=int(group_id),
-                        message= await construct_group_message(artist_name, filtered_illusts)
+                        message=await construct_group_message(artist_name, filtered_illusts)
                     )
                     # 避免发送消息过快被限制
                     await asyncio.sleep(1)
