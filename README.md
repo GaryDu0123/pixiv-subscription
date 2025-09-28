@@ -66,7 +66,7 @@ CHECK_INTERVAL_HOURS = 3
 
    如果操作正确，会显示auth_token和refresh_token
 
-   > ⚠️ 注意：code的有效期极短，请尽量减少步骤5和6之间的延迟。如果失败，请从步骤1重新开始。
+   > ⚠️ 注意：code的有效期极短，请尽量减少步骤6和7之间的延迟。如果失败，请从步骤1重新开始。
 
 8. 将获取到的 `refresh_token` 填入 `refresh-token.json` 文件中
     ```json
