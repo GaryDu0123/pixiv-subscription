@@ -17,14 +17,14 @@
 ### 1. 安装与配置
 
 * 安装必要的依赖库：
-  - 依赖库：
-    ```bash
-    pip install -r requirements.txt
-    ```
-  - 或者手动安装：
-    ```bash
-    pip install pixivpy3==3.7.5 aiohttp
-    ```
+    - 依赖库：
+      ```bash
+      pip install -r requirements.txt
+      ```
+    - 或者手动安装：
+      ```bash
+      pip install pixivpy3==3.7.5 aiohttp
+      ```
 * 下载或者clone本插件项目，并将`pixiv-subscription` 文件夹放入 HoshinoBot 的 `modules` 目录下。
 * 在 `MODULES_ON` 列表中，添加 `pixiv-subscription` 并重启 HoshinoBot 使配置生效
 
@@ -55,20 +55,20 @@ CHECK_INTERVAL_HOURS = 3
     ```
     bash python pixiv_auth.py login
     ```
-2. 脚本会自动打开浏览器进入Pixiv登录页面
-3. 打开开发者工具(F12)，切换到网络(Network)标签页
-4. 启用持久日志记录 ("Preserve log")
-5. 在过滤器字段中输入：callback?
-6. 完成Pixiv登录流程
-7. 登录成功后，你会看到一个空白页面和类似这样的请求：
+   脚本会自动打开浏览器进入Pixiv登录页面
+2. 打开开发者工具(F12)，切换到网络(Network)标签页
+3. 启用持久日志记录 ("Preserve log")
+4. 在过滤器字段中输入：callback?
+5. 完成Pixiv登录流程
+6. 登录成功后，你会看到一个空白页面和类似这样的请求：
    https://app-api.pixiv.net/web/v1/users/auth/pixiv/callback?state=...&code=...
    复制code参数的值到脚本提示中并按回车
 
    如果操作正确，会显示auth_token和refresh_token
 
-   > ⚠️ 注意：code的有效期极短，请尽量减少步骤6和7之间的延迟。如果失败，请从步骤1重新开始。
+   > ⚠️ 注意：code的有效期极短，请尽量减少步骤5和6之间的延迟。如果失败，请从步骤1重新开始。
 
-8. 将获取到的 `refresh_token` 填入 `refresh-token.json` 文件中
+7. 将获取到的 `refresh_token` 填入 `refresh-token.json` 文件中
     ```json
     {
       "refresh_token": "你的_refresh_token_值"
@@ -118,7 +118,6 @@ pixiv取消订阅 12345678
 pixiv屏蔽tag 巨乳
 ```
 
-
 ## 工作原理
 
 1. **定时检查**：插件会根据 `CHECK_INTERVAL_HOURS` 设置的间隔时间自动检查订阅画师的新作品
@@ -132,7 +131,6 @@ pixiv屏蔽tag 巨乳
 - refresh_token的过期时间较长, 没有明确的过期时间, 但如果发现bot出现登录失败, 可以尝试重新获取并更新token
 - 图片质量选择`original`质量时文件较大，可能导致发送失败
 
-
 ## 文件结构
 
 ```
@@ -145,11 +143,15 @@ pixiv-subscription/
 ```
 
 ## Future Plans
-- 目前[插件列表](https://github.com/pcrbot/HoshinoBot-plugins-index)已经有[P站搜索](https://github.com/scofieldle/LeoBot/tree/main/hoshino/modules/pixiv_new)插件,
-提供了搜索画师作品和查看日月榜单等功能, 但是我加入的群中其实并没有太大的使用需求, 不清楚是否需要这个功能? 如果有需要的话确实可以考虑将两个插件合并
-- pixivpy3会通过`refresh_token`来获取`access_token`, 后续的请求都是携带`access_token`进行的, 但`access_token`的有效期只有[1+小时](https://github.com/upbit/pixivpy/issues/182), 所以在不做任何处理的情况下, 过一段时间后就会出现登陆失效的情况.
-目前采用的策略是直接进行api的请求, 如果发现请求失败则使用`api.login(refresh_token)`来重新登陆, 但是作为时长大于3小时的定时任务来说, 每次必定会出现一次失败请求, 后续可以考虑优化一下这个地方
 
+- 目前[插件列表](https://github.com/pcrbot/HoshinoBot-plugins-index)
+  已经有[P站搜索](https://github.com/scofieldle/LeoBot/tree/main/hoshino/modules/pixiv_new)插件,
+  提供了搜索画师作品和查看日月榜单等功能, 但是我加入的群中其实并没有太大的使用需求, 不清楚是否需要这个功能?
+  如果有需要的话确实可以考虑将两个插件合并
+- pixivpy3会通过`refresh_token`来获取`access_token`, 后续的请求都是携带`access_token`进行的, 但`access_token`
+  的有效期只有[1+小时](https://github.com/upbit/pixivpy/issues/182), 所以在不做任何处理的情况下, 过一段时间后就会出现登陆失效的情况.
+  目前采用的策略是直接进行api的请求, 如果发现请求失败则使用`api.login(refresh_token)`来重新登陆, 但是作为时长大于3小时的定时任务来说,
+  每次必定会出现一次失败请求, 后续可以考虑优化一下这个地方
 
 ## 贡献
 
