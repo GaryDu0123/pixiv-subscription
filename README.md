@@ -45,7 +45,7 @@ MAX_DISPLAY_WORKS = 3
 IMAGE_QUALITY = 'large'
 
 # 检查更新的时间间隔（小时）
-CHECK_INTERVAL_HOURS-  = 3
+CHECK_INTERVAL_HOURS = 3
 ```
 
 ### 4. 使用`pixiv_auth.py`获取 Pixiv Refresh Token
