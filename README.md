@@ -14,16 +14,19 @@
 
 ## 安装配置
 
-### 1. 依赖安装
+### 1. 安装与配置
 
-- 依赖库：
-  ```bash
-  pip install -r requirements.txt
-  ```
-- 或者手动安装：
-  ```bash
-  pip install pixivpy3==3.7.5 aiohttp
-  ```
+* 安装必要的依赖库：
+  - 依赖库：
+    ```bash
+    pip install -r requirements.txt
+    ```
+  - 或者手动安装：
+    ```bash
+    pip install pixivpy3==3.7.5 aiohttp
+    ```
+* 下载或者clone本插件项目，并将`pixiv-subscription` 文件夹放入 HoshinoBot 的 `modules` 目录下。
+* 在 `MODULES_ON` 列表中，添加 `pixiv-subscription` 并重启 HoshinoBot 使配置生效
 
 ### 2. 配置说明
 
@@ -42,7 +45,7 @@ MAX_DISPLAY_WORKS = 3
 IMAGE_QUALITY = 'large'
 
 # 检查更新的时间间隔（小时）
-CHECK_INTERVAL_HOURS = 3
+CHECK_INTERVAL_HOURS-  = 3
 ```
 
 ### 4. 使用`pixiv_auth.py`获取 Pixiv Refresh Token
@@ -143,7 +146,7 @@ pixiv-subscription/
 
 ## Future Plans
 - 目前[插件列表](https://github.com/pcrbot/HoshinoBot-plugins-index)已经有[P站搜索](https://github.com/scofieldle/LeoBot/tree/main/hoshino/modules/pixiv_new)插件,
-提供了搜索画师作品和查看日月榜单等功能, 但是我加入的群中其实并没有太大的使用需求, 不清楚大家是否需要这个功能? 如果有需要的话确实可以考虑将两个插件合并
+提供了搜索画师作品和查看日月榜单等功能, 但是我加入的群中其实并没有太大的使用需求, 不清楚是否需要这个功能? 如果有需要的话确实可以考虑将两个插件合并
 - pixivpy3会通过`refresh_token`来获取`access_token`, 后续的请求都是携带`access_token`进行的, 但`access_token`的有效期只有[1+小时](https://github.com/upbit/pixivpy/issues/182), 所以在不做任何处理的情况下, 过一段时间后就会出现登陆失效的情况.
 目前采用的策略是直接进行api的请求, 如果发现请求失败则使用`api.login(refresh_token)`来重新登陆, 但是作为时长大于3小时的定时任务来说, 每次必定会出现一次失败请求, 后续可以考虑优化一下这个地方
 
