@@ -23,12 +23,12 @@ HELP_TEXT = """
 [pixiv订阅画师 画师ID] 订阅画师
 [pixiv取消订阅 画师ID] 取消订阅画师  
 [pixiv订阅列表] 查看订阅列表
-[pixiv重设登录token] 设置refresh_token (管理员)
-[pixiv开启r18] 允许推送R18内容 (管理员)
-[pixiv关闭r18] 屏蔽R18内容 (管理员)
-[pixiv屏蔽tag tag名] 屏蔽包含指定tag的作品 (管理员)
-[pixiv取消屏蔽tag tag名] 取消屏蔽指定tag (管理员)
+[pixiv开启r18] 允许推送R18内容
+[pixiv关闭r18] 屏蔽R18内容
+[pixiv屏蔽tag tag名] 屏蔽包含指定tag的作品
+[pixiv取消屏蔽tag tag名] 取消屏蔽指定tag
 [pixiv群设置] 查看当前群的设置
+[pixiv重设登录token] 设置refresh_token
 """.strip()
 
 # 创建服务
@@ -237,7 +237,6 @@ class PixivSubscriptionManager:
             check_start = start_time - timedelta(hours=interval_hours)
             check_end = start_time
 
-            sv.logger.info(f"检查画师 {user_id} 时间范围: {check_start} 到 {check_end}")
 
             # 默认会返回30个作品, 足够大多数场景使用
             result = await self.__exec_and_retry_with_login(
@@ -367,6 +366,9 @@ manager = PixivSubscriptionManager()
 @sv.on_prefix('pixiv订阅画师')
 async def subscribe_artist(bot, ev: CQEvent):
     """订阅画师"""
+    if not priv.check_priv(ev, priv.ADMIN):
+        await bot.send(ev, "只有群主或管理员才能订阅画师")
+        return
     user_id = ev.message.extract_plain_text().strip()
     if not user_id:
         await bot.send(ev, "请输入画师ID\n例：订阅画师 123456")
@@ -394,6 +396,9 @@ async def subscribe_artist(bot, ev: CQEvent):
 @sv.on_prefix('pixiv取消订阅')
 async def unsubscribe_artist(bot, ev: CQEvent):
     """取消订阅画师"""
+    if not priv.check_priv(ev, priv.ADMIN):
+        await bot.send(ev, "只有群主或管理员才能取消订阅画师")
+        return
     user_id = ev.message.extract_plain_text().strip()
     if not user_id:
         await bot.send(ev, "请输入要取消订阅的画师ID\n例：取消订阅 123456")
@@ -426,8 +431,8 @@ async def list_subscriptions(bot, ev: CQEvent):
 @sv.on_prefix('pixiv重设登录token')
 async def set_pixiv_token(bot, ev: CQEvent):
     """设置pixiv refresh_token (仅群主/管理员)"""
-    if not priv.check_priv(ev, priv.ADMIN):
-        await bot.send(ev, "只有群主或管理员才能设置pixiv refresh_token")
+    if not priv.check_priv(ev, priv.SUPERUSER):
+        await bot.send(ev, "只有超级用户才能设置pixiv refresh_token, 请使用来杯咖啡通知维护者")
         return
 
     refresh_token = ev.message.extract_plain_text().strip()

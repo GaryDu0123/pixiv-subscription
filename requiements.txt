@@ -1,1 +1,2 @@
 pixivpy3==3.7.5
+aiohttp
