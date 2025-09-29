@@ -48,7 +48,7 @@ IMAGE_QUALITY = 'large'
 CHECK_INTERVAL_HOURS = 3
 ```
 
-### 4. 使用`pixiv_auth.py`获取 Pixiv Refresh Token
+### 3. 使用`pixiv_auth.py`获取 Pixiv Refresh Token
 
 1. 下载并运行认证脚本：
 
