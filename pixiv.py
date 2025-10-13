@@ -9,11 +9,17 @@ from hoshino import Service, priv
 from hoshino.typing import CQEvent
 from pixivpy3 import AppPixivAPI
 from .config import PROXY_URL, MAX_DISPLAY_WORKS, IMAGE_QUALITY, CHECK_INTERVAL_HOURS
+from hoshino.util import DailyNumberLimiter
+try:
+    from .config import PGET_DAILY_LIMIT
+except ImportError:
+    PGET_DAILY_LIMIT = 10  # 兼容旧配置
 import aiohttp
 
 # 插件配置
 PIXIV_REFRESH_TOKEN_PATH = os.path.join(os.path.dirname(__file__), 'refresh-token.json')
 PIXIV_SUBSCRIPTION_PATH = os.path.join(os.path.dirname(__file__), 'subscriptions.json')
+pget_daily_time_limiter = DailyNumberLimiter(PGET_DAILY_LIMIT)
 
 if IMAGE_QUALITY not in ['large', 'medium', 'square_medium', 'original']:
     IMAGE_QUALITY = 'large'  # 默认值
@@ -28,7 +34,7 @@ HELP_TEXT = """
 [pixiv屏蔽tag tag名] 屏蔽包含指定tag的作品
 [pixiv取消屏蔽tag tag名] 取消屏蔽指定tag
 [pixiv群设置] 查看当前群的设置
-[pixiv重设登录token] 设置refresh_token
+[pixiv获取插画\|pget] 通过作品ID获取指定作品
 """.strip()
 
 # 创建服务
@@ -271,6 +277,20 @@ class PixivSubscriptionManager:
             sv.logger.error(f"获取作品列表失败: {e}")
             return {}, []
 
+    async def get_illust_by_id(self, illust_id: str) -> Dict:
+        """根据作品ID获取作品详情"""
+        try:
+            result = await self.__exec_and_retry_with_login(
+                self.api.illust_detail,
+                illust_id
+            )
+            if not result or 'illust' not in result or not result['illust']:
+                raise ValueError(result)
+            return result['illust']
+        except Exception as e:
+            sv.logger.error(f"获取作品详情失败: {e}")
+            return {}
+
     @staticmethod
     async def download_image_as_base64(url: str) -> str:
         """下载图片并转换为base64编码"""
@@ -302,7 +322,6 @@ class PixivSubscriptionManager:
     def get_image_urls(illust: dict) -> str:
         """
         获取作品的图片URL, 无论是单图还是多图都是返回第一张图的URL
-        todo 如果需要找原图, 需要去meta_pages里找
         """
         url = ""
         # 单独处理原图的请求
@@ -523,6 +542,41 @@ async def show_group_settings(bot, ev: CQEvent):
         msg += "🚫 屏蔽tag: 无"
 
     await bot.send(ev, msg)
+
+
+@sv.on_prefix('pixiv获取插画', 'pget')
+async def fetch_illust(bot, ev: CQEvent):
+    """根据作品ID获取插画"""
+    if not pget_daily_time_limiter.check(ev.user_id):
+        return await bot.send(ev, f"❌ 获取插画的次数已达上限")
+    illust_id = ev.message.extract_plain_text().strip()
+    if not illust_id:
+        return await bot.send(ev, "请输入作品ID\n例：获取插画 12345678")
+    if not illust_id.isdigit():
+        return await bot.send(ev, "作品ID必须为数字")
+
+    illust = await manager.get_illust_by_id(illust_id)
+    if not illust:
+        return await bot.send(ev, f"作品ID {illust_id} 被吞掉啦~")
+
+    title = illust.get('title', '无标题')
+    user_info = illust.get('user')
+    artist_name = user_info['name'] if user_info else f"作品ID {illust_id}"
+    tags = illust.get('tags', [])
+    msg_parts = [f"🎨 {title}", f"🖌️ {artist_name}",  f"🏷️ {', '.join([tag.get('name', '') for tag in tags[:3] if tag.get('name')])}"]
+
+    image_url = manager.get_image_urls(illust)
+    if image_url:
+        b64_data = await manager.download_image_as_base64(image_url)
+        if b64_data:
+            msg_parts.append(f"[CQ:image,file=base64://{b64_data}]")
+        else:
+            sv.logger.error(f"图片下载失败: {image_url}")
+            return await bot.send("❌ 图片下载失败")
+    else:
+        return await bot.send("❌ 未找到图片URL")
+    pget_daily_time_limiter.increase(ev.user_id)
+    return await bot.send(ev, '\n'.join(msg_parts))
 
 
 @sv.on_prefix('pixiv强制检查')

@@ -9,3 +9,5 @@ MAX_DISPLAY_WORKS = 3
 IMAGE_QUALITY = 'large'
 
 CHECK_INTERVAL_HOURS = 3  # 检查更新的时间间隔，单位为小时
+
+PGET_DAILY_LIMIT = 10  # pixiv获取插画命令每日获取作品的上限
