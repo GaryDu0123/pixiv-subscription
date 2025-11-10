@@ -2,6 +2,7 @@ import base64
 import os
 import json
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple
 import nonebot
@@ -26,15 +27,15 @@ if IMAGE_QUALITY not in ['large', 'medium', 'square_medium', 'original']:
 
 HELP_TEXT = """
 🎨 pixiv画师订阅插件
-[pixiv订阅画师 画师ID] 订阅画师
-[pixiv取消订阅 画师ID] 取消订阅画师  
+[pixiv订阅画师 画师ID/主页URL] 订阅画师
+[pixiv取消订阅 画师ID/主页URL] 取消订阅画师  
 [pixiv订阅列表] 查看订阅列表
 [pixiv开启r18] 允许推送R18内容
 [pixiv关闭r18] 屏蔽R18内容
 [pixiv屏蔽tag tag名] 屏蔽包含指定tag的作品
 [pixiv取消屏蔽tag tag名] 取消屏蔽指定tag
 [pixiv群设置] 查看当前群的设置
-[pixiv获取插画\|pget] 通过作品ID获取指定作品
+[pixiv获取插画|pget 作品ID/作品URL] 通过作品ID或URL获取指定作品
 """.strip()
 
 # 创建服务
@@ -388,12 +389,21 @@ async def subscribe_artist(bot, ev: CQEvent):
     if not priv.check_priv(ev, priv.ADMIN):
         await bot.send(ev, "只有群主或管理员才能订阅画师")
         return
-    user_id = ev.message.extract_plain_text().strip()
-    if not user_id:
-        await bot.send(ev, "请输入画师ID\n例：订阅画师 123456")
+
+    input_text = ev.message.extract_plain_text().strip()
+    if not input_text:
+        await bot.send(ev, "请输入画师ID或用户主页链接")
         return
+
+    # 尝试从URL中提取ID
+    match = re.search(r'/users/(\d+)', input_text)
+    if match:
+        user_id = match.group(1)
+    else:
+        user_id = input_text
+
     if not user_id.isdigit():
-        await bot.send(ev, "画师ID必须为数字")
+        await bot.send(ev, "无效的画师ID或链接")
         return
 
     group_id = str(ev.group_id)
@@ -418,9 +428,21 @@ async def unsubscribe_artist(bot, ev: CQEvent):
     if not priv.check_priv(ev, priv.ADMIN):
         await bot.send(ev, "只有群主或管理员才能取消订阅画师")
         return
-    user_id = ev.message.extract_plain_text().strip()
-    if not user_id:
-        await bot.send(ev, "请输入要取消订阅的画师ID\n例：取消订阅 123456")
+
+    input_text = ev.message.extract_plain_text().strip()
+    if not input_text:
+        await bot.send(ev, "请输入要取消订阅的画师ID或用户主页链接")
+        return
+
+    # 尝试从URL中提取ID
+    match = re.search(r'/users/(\d+)', input_text)
+    if match:
+        user_id = match.group(1)
+    else:
+        user_id = input_text
+
+    if not user_id.isdigit():
+        await bot.send(ev, "无效的画师ID或链接, ID必须为数字。")
         return
 
     group_id = str(ev.group_id)
@@ -549,11 +571,21 @@ async def fetch_illust(bot, ev: CQEvent):
     """根据作品ID获取插画"""
     if not pget_daily_time_limiter.check(ev.user_id):
         return await bot.send(ev, f"❌ 获取插画的次数已达上限")
-    illust_id = ev.message.extract_plain_text().strip()
-    if not illust_id:
-        return await bot.send(ev, "请输入作品ID\n例：获取插画 12345678")
+
+    input_text = ev.message.extract_plain_text().strip()
+    if not input_text:
+        return await bot.send(ev,
+                              "请输入作品ID或作品链接")
+
+    # 尝试从URL中提取ID
+    match = re.search(r'/artworks/(\d+)', input_text)
+    if match:
+        illust_id = match.group(1)
+    else:
+        illust_id = input_text
+
     if not illust_id.isdigit():
-        return await bot.send(ev, "作品ID必须为数字")
+        return await bot.send(ev, "无效的作品ID或链接")
 
     illust = await manager.get_illust_by_id(illust_id)
     if not illust:
