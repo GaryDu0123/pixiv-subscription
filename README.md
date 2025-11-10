@@ -116,6 +116,7 @@ PGET_DAILY_LIMIT = 10
 ```
 # 订阅画师（需要知道画师的用户ID）例如: 用户https://www.pixiv.net/users/73798
 pixiv订阅画师 73798
+pixiv订阅画师 https://www.pixiv.net/users/73798
 
 # 查看订阅列表
 pixiv订阅列表
