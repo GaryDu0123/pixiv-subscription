@@ -11,3 +11,7 @@ IMAGE_QUALITY = 'large'
 CHECK_INTERVAL_HOURS = 3  # 检查更新的时间间隔，单位为小时
 
 PGET_DAILY_LIMIT = 10  # pixiv获取插画命令每日获取作品的上限
+
+CHAIN_REPLY = True  # 是否启用合并转发回复模式
+
+RANK_LIMIT = 5  # 每次推送排行榜时最多展示的作品数量

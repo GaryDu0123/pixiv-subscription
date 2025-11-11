@@ -292,6 +292,32 @@ class PixivSubscriptionManager:
             sv.logger.error(f"获取作品详情失败: {e}")
             return {}
 
+    async def get_ranking(self, mode: str):
+        """
+        用于获取并发送指定模式的排行榜。
+        :param mode: 排行榜模式 (e.g., 'day', 'week_r18')
+        """
+        try:
+            result = await self.__exec_and_retry_with_login(
+                self.api.illust_ranking,
+                mode
+            )
+
+            if not isinstance(result, dict) or 'illusts' not in result or not result['illusts']:
+                # 这种情况可能是API返回了其他类型的错误(如'Not Found')或榜单为空
+                sv.logger.error(f"获取Pixiv排行榜失败 '{mode}': {result}")
+                return {}
+
+            # 成功获取，返回作品列表
+            return result.get('illusts', [])
+
+        except Exception as e:
+            # 捕获其他意外错误，例如网络问题
+            sv.logger.error(f"获取Pixiv排行榜时发生未知异常 '{mode}': {e}")
+            import traceback
+            sv.logger.error(traceback.format_exc())
+            return {}
+
     @staticmethod
     async def download_image_as_base64(url: str) -> str:
         """下载图片并转换为base64编码"""
