@@ -304,7 +304,6 @@ class PixivSubscriptionManager:
             )
 
             if not isinstance(result, dict) or 'illusts' not in result or not result['illusts']:
-                # 这种情况可能是API返回了其他类型的错误(如'Not Found')或榜单为空
                 sv.logger.error(f"获取Pixiv排行榜失败 '{mode}': {result}")
                 return {}
 
