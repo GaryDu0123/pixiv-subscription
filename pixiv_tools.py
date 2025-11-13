@@ -11,21 +11,22 @@ from typing import List
 from hoshino.util import DailyNumberLimiter
 from .config import MAX_DISPLAY_WORKS
 try:
-    from .config import CHAIN_REPLY, RANK_LIMIT, PGET_DAILY_LIMIT
+    from .config import CHAIN_REPLY, RANK_LIMIT, PGET_DAILY_LIMIT, PREVIEW_ILLUSTRATOR_LIMIT
 except ImportError:
     CHAIN_REPLY = True  # 默认启用合并转发回复模式
     RANK_LIMIT = 5     # 默认展示排行榜作品数量为5
     PGET_DAILY_LIMIT = 10  # 兼容旧配置
+    PREVIEW_ILLUSTRATOR_LIMIT = 10
 
 
 pget_daily_time_limiter = DailyNumberLimiter(PGET_DAILY_LIMIT)
+preview_illustrator_limiter = DailyNumberLimiter(PREVIEW_ILLUSTRATOR_LIMIT)
 
 if isinstance(NICKNAME, str):
     NICKNAME = [NICKNAME]
 
 HELP = '''
-[插画搜索 关键词] 搜索相关作品
-[插画画师 画师ID] 获取画师最新作品
+[预览画师 画师ID] 获取画师最新作品
 [插画日榜] 获取Pixiv插画日榜
 [插画男性向排行] 获取Pixiv插画男性向排行榜
 [插画女性向排行] 获取Pixiv插画女性向排行榜
@@ -121,23 +122,23 @@ async def send_ranking(bot, ev: CQEvent, mode: str, title: str):
     await send_messages(bot, ev, messages_to_send)
 
 
-@sv.on_prefix('插画画师')
+@sv.on_prefix('预览画师')
 async def get_artist_illusts(bot, ev: CQEvent):
     """
     获取指定画师的最新作品, 增加了群聊发送规则判断.
     """
+    if not preview_illustrator_limiter.check(ev.user_id):
+        return await bot.send(ev, f"❌ 今日预览画师作品的次数已达上限")
     artist_id = ev.message.extract_plain_text().strip()
     if not artist_id.isdigit():
-        await bot.send(ev, "请输入正确的画师ID！")
-        return
+        return await bot.send(ev, "请输入正确的画师ID！")
 
     await bot.send(ev, f"正在获取画师 {artist_id} 的最新作品...")
 
     # 获取画师所有近期作品, api限制默认获取前30个作品
     illusts, user_info = await manager.user_illusts(artist_id)
     if not illusts:
-        await bot.send(ev, f"获取画师 {artist_id} 的作品失败，可能是画师ID不存在、该画师没有作品或API暂时无法访问。")
-        return
+        return await bot.send(ev, f"获取画师 {artist_id} 的作品失败，可能是画师ID不存在、该画师没有作品或API暂时无法访问。")
 
     # 筛选允许发送的作品
     allowed_illusts = []
@@ -153,8 +154,7 @@ async def get_artist_illusts(bot, ev: CQEvent):
 
     # 判断是否有可发送的作品
     if not allowed_illusts:
-        await bot.send(ev, f"画师 {artist_id} 的近期作品不符合本群的设置~")
-        return
+        return await bot.send(ev, f"画师 {artist_id} 的近期作品不符合本群的设置~")
 
     # 给消息分块准备内容
     messages_to_send = []
@@ -191,6 +191,8 @@ async def get_artist_illusts(bot, ev: CQEvent):
 
     # 发送消息
     await send_messages(bot, ev, messages_to_send)
+    preview_illustrator_limiter.increase(ev.user_id)
+    return None
 
 
 @sv.on_fullmatch('插画日榜')
