@@ -4,23 +4,18 @@ import json
 import asyncio
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union, Any, Coroutine
 import nonebot
 from hoshino import Service, priv
 from hoshino.typing import CQEvent
 from pixivpy3 import AppPixivAPI
 from .config import PROXY_URL, MAX_DISPLAY_WORKS, IMAGE_QUALITY, CHECK_INTERVAL_HOURS
-from hoshino.util import DailyNumberLimiter
-try:
-    from .config import PGET_DAILY_LIMIT
-except ImportError:
-    PGET_DAILY_LIMIT = 10  # 兼容旧配置
 import aiohttp
 
 # 插件配置
 PIXIV_REFRESH_TOKEN_PATH = os.path.join(os.path.dirname(__file__), 'refresh-token.json')
 PIXIV_SUBSCRIPTION_PATH = os.path.join(os.path.dirname(__file__), 'subscriptions.json')
-pget_daily_time_limiter = DailyNumberLimiter(PGET_DAILY_LIMIT)
+
 
 if IMAGE_QUALITY not in ['large', 'medium', 'square_medium', 'original']:
     IMAGE_QUALITY = 'large'  # 默认值
@@ -193,8 +188,10 @@ class PixivSubscriptionManager:
             'blocked_tags': []
         }
 
-    def is_illust_allowed(self, illust: dict, group_id: str) -> bool:
+    def is_illust_allowed(self, illust: dict, group_id: Union[str, int]) -> bool:
         """检查作品是否允许在指定群推送"""
+        if isinstance(group_id, int):
+            group_id = str(group_id)
         # 检查R18限制
         if not self.is_r18_enabled(group_id):
             # x_restrict: 0=全年龄, 1=R18, 2=R18G
@@ -291,6 +288,50 @@ class PixivSubscriptionManager:
         except Exception as e:
             sv.logger.error(f"获取作品详情失败: {e}")
             return {}
+
+    async def get_ranking(self, mode: str) -> Union[Dict[Any, Any]]:
+        """
+        用于获取并发送指定模式的排行榜。
+        :param mode: 排行榜模式 (e.g., 'day', 'week_r18')
+        """
+        try:
+            result = await self.__exec_and_retry_with_login(
+                self.api.illust_ranking,
+                mode
+            )
+
+            if not isinstance(result, dict) or 'illusts' not in result or not result['illusts']:
+                sv.logger.error(f"获取Pixiv排行榜失败 '{mode}': {result}")
+                return {}
+
+            # 成功获取，返回作品列表
+            return result.get('illusts', {})
+
+        except Exception as e:
+            # 捕获其他意外错误，例如网络问题
+            sv.logger.error(f"获取Pixiv排行榜时发生未知异常 '{mode}': {e}")
+            return {}
+
+    async def user_illusts(self, user_id: Union[str, int]):
+        """
+        获取指定用户的作品列表, api限制默认获取前30个作品
+        :param user_id: 画师用户ID
+        """
+        try:
+            result = await self.__exec_and_retry_with_login(
+                self.api.user_illusts,
+                user_id
+            )
+
+            if not isinstance(result, dict) or 'illusts' not in result or not result['illusts']:
+                sv.logger.error(f"获取Pixiv用户作品列表失败 '{user_id}': {result}")
+                return {}, {}
+
+            # 成功获取，返回作品列表
+            return result.get('illusts', {}), result.get('user', {})
+        except Exception as e:
+            sv.logger.error(f"获取Pixiv用户作品列表时发生未知异常 '{user_id}': {e}")
+            return {}, {}
 
     @staticmethod
     async def download_image_as_base64(url: str) -> str:
@@ -566,49 +607,6 @@ async def show_group_settings(bot, ev: CQEvent):
     await bot.send(ev, msg)
 
 
-@sv.on_prefix('pixiv获取插画', 'pget')
-async def fetch_illust(bot, ev: CQEvent):
-    """根据作品ID获取插画"""
-    if not pget_daily_time_limiter.check(ev.user_id):
-        return await bot.send(ev, f"❌ 获取插画的次数已达上限")
-
-    input_text = ev.message.extract_plain_text().strip()
-    if not input_text:
-        return await bot.send(ev,
-                              "请输入作品ID或作品链接")
-
-    # 尝试从URL中提取ID
-    match = re.search(r'/artworks/(\d+)', input_text)
-    if match:
-        illust_id = match.group(1)
-    else:
-        illust_id = input_text
-
-    if not illust_id.isdigit():
-        return await bot.send(ev, "无效的作品ID或链接")
-
-    illust = await manager.get_illust_by_id(illust_id)
-    if not illust:
-        return await bot.send(ev, f"作品ID {illust_id} 被吞掉啦~")
-
-    title = illust.get('title', '无标题')
-    user_info = illust.get('user')
-    artist_name = user_info['name'] if user_info else f"作品ID {illust_id}"
-    tags = illust.get('tags', [])
-    msg_parts = [f"🎨 {title}", f"🖌️ {artist_name}",  f"🏷️ {', '.join([tag.get('name', '') for tag in tags[:3] if tag.get('name')])}"]
-
-    image_url = manager.get_image_urls(illust)
-    if image_url:
-        b64_data = await manager.download_image_as_base64(image_url)
-        if b64_data:
-            msg_parts.append(f"[CQ:image,file=base64://{b64_data}]")
-        else:
-            sv.logger.error(f"图片下载失败: {image_url}")
-            return await bot.send("❌ 图片下载失败")
-    else:
-        return await bot.send("❌ 未找到图片URL")
-    pget_daily_time_limiter.increase(ev.user_id)
-    return await bot.send(ev, '\n'.join(msg_parts))
 
 
 @sv.on_prefix('pixiv强制检查')
