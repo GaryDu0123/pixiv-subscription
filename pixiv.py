@@ -30,7 +30,6 @@ HELP_TEXT = """
 [pixiv屏蔽tag tag名] 屏蔽包含指定tag的作品
 [pixiv取消屏蔽tag tag名] 取消屏蔽指定tag
 [pixiv群设置] 查看当前群的设置
-[pixiv获取插画|pget 作品ID/作品URL] 通过作品ID或URL获取指定作品
 """.strip()
 
 # 创建服务

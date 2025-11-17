@@ -26,7 +26,8 @@ if isinstance(NICKNAME, str):
     NICKNAME = [NICKNAME]
 
 HELP = '''
-[预览画师 画师ID] 获取画师最新作品
+[预览画师 画师ID/画师URL] 预览画师最新作品
+[获取插画|pget 作品ID/作品URL] 通过作品ID或URL获取指定作品
 [插画日榜] 获取Pixiv插画日榜
 [插画男性向排行] 获取Pixiv插画男性向排行榜
 [插画女性向排行] 获取Pixiv插画女性向排行榜
@@ -49,7 +50,7 @@ async def send_messages(bot, ev: CQEvent, messages: List[str]):
     - False: 将消息列表逐条发送, 每条之间有2秒延迟.
     """
     if CHAIN_REPLY:
-        # Chained forward mode
+        # 合并转发的节点
         forward_nodes = [
             {
                 "type": "node",
@@ -61,11 +62,11 @@ async def send_messages(bot, ev: CQEvent, messages: List[str]):
             }
             for msg in messages
         ]
-        # Ensure the group_id is valid for sending a group forward message
+
         if hasattr(ev, 'group_id') and ev.group_id:
             await bot.send_group_forward_msg(group_id=ev.group_id, messages=forward_nodes)
         else:
-            # Fallback for non-group contexts, send sequentially
+            # Fallback, send sequentially
             for msg in messages:
                 await bot.send(ev, msg)
                 await asyncio.sleep(2)
@@ -129,9 +130,20 @@ async def get_artist_illusts(bot, ev: CQEvent):
     """
     if not preview_illustrator_limiter.check(ev.user_id):
         return await bot.send(ev, f"❌ 今日预览画师作品的次数已达上限")
-    artist_id = ev.message.extract_plain_text().strip()
+
+    input_text = ev.message.extract_plain_text().strip()
+    if not input_text:
+        return await bot.send(ev, "请输入画师ID或用户主页链接")
+
+    # 尝试从URL中提取ID
+    match = re.search(r'/users/(\d+)', input_text)
+    if match:
+        artist_id = match.group(1)
+    else:
+        artist_id = input_text
+
     if not artist_id.isdigit():
-        return await bot.send(ev, "请输入正确的画师ID！")
+        return await bot.send(ev, "无效的画师ID或链接")
 
     await bot.send(ev, f"正在获取画师 {artist_id} 的最新作品...")
 
@@ -221,7 +233,7 @@ async def original_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='week_original', title='原画榜')
 
 
-@sv.on_prefix('pixiv获取插画', 'pget')
+@sv.on_prefix('获取插画', 'pget')
 async def fetch_illust(bot, ev: CQEvent):
     """根据作品ID获取插画"""
     if not pget_daily_time_limiter.check(ev.user_id):
