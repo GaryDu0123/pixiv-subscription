@@ -17,3 +17,8 @@ PREVIEW_ILLUSTRATOR_LIMIT = 10  # 单用户预览画师信息命令每日使用�
 CHAIN_REPLY = True  # 是否启用合并转发回复模式
 
 RANK_LIMIT = 5  # 每次推送排行榜时最多展示的作品数量
+
+# 是否启用“推送机器人账号关注的画师”功能
+# 开启后，各群管理员才能通过指令选择是否接收推送
+# 出于隐私和性能考虑，默认关闭
+ENABLE_FOLLOWING_SUBSCRIPTION = False
