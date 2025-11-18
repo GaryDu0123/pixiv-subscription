@@ -258,6 +258,11 @@ async def fetch_illust(bot, ev: CQEvent):
     if not illust:
         return await bot.send(ev, f"作品ID {illust_id} 被吞掉啦~")
 
+    # 检查作品是否允许在本群发送
+    group_id = ev.group_id
+    if not manager.is_illust_allowed(illust, group_id):
+        return await bot.send(ev, f"❌ 该作品不符合本群的设置，无法发送~")
+
     title = illust.get('title', '无标题')
     user_info = illust.get('user')
     artist_name = user_info['name'] if user_info else f"作品ID {illust_id}"
