@@ -168,6 +168,17 @@ pixiv-subscription/
 └── subscriptions.json  # 群组订阅数据以及设置（启动后自动生成）
 ```
 
+## Future Plans
+
+- pixivpy3会通过`refresh_token`来获取`access_token`, 后续的请求都是携带`access_token`进行的, 但`access_token`
+  的有效期只有[1+小时](https://github.com/upbit/pixivpy/issues/182), 所以在不做任何处理的情况下, 过一段时间后就会出现登陆失效的情况.
+  目前采用的策略是直接进行api的请求, 如果发现请求失败则使用`api.login(refresh_token)`来重新登陆, 但是作为时长大于3小时的定时任务来说,
+  每次必定会出现一次失败请求, 后续可以考虑优化一下这个地方
+
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request 来改进这个插件。
+
+---
+
+如有问题或建议，请在项目仓库中提交 Issue。
