@@ -26,14 +26,14 @@ if isinstance(NICKNAME, str):
     NICKNAME = [NICKNAME]
 
 HELP = '''
-[预览画师 画师ID/画师URL] 预览画师最新作品
-[获取插画|pget 作品ID/作品URL] 通过作品ID或URL获取指定作品
-[插画日榜] 获取插画日榜
-[插画男性向排行] 获取插画男性向排行榜
-[插画女性向排行] 获取插画女性向排行榜
-[插画周榜] 获取插画周榜
-[插画月榜] 获取插画月榜
-[插画原画榜] 获取插画原画榜
+[pixiv预览画师 画师ID/画师URL] 预览画师最新作品
+[pixiv获取插画|pget 作品ID/作品URL] 通过作品ID或URL获取指定作品
+[pixiv日榜] 获取插画日榜
+[pixiv男性向排行] 获取插画男性向排行榜
+[pixiv女性向排行] 获取插画女性向排行榜
+[pixiv周榜] 获取插画周榜
+[pixiv月榜] 获取插画月榜
+[pixiv原画榜] 获取插画原画榜
 '''.strip()
 
 sv = Service(
@@ -123,7 +123,7 @@ async def send_ranking(bot, ev: CQEvent, mode: str, title: str):
     await send_messages(bot, ev, messages_to_send)
 
 
-@sv.on_prefix('预览画师')
+@sv.on_prefix('pixiv预览画师')
 async def get_artist_illusts(bot, ev: CQEvent):
     """
     获取指定画师的最新作品, 增加了群聊发送规则判断.
@@ -207,33 +207,33 @@ async def get_artist_illusts(bot, ev: CQEvent):
     return None
 
 
-@sv.on_fullmatch('插画日榜')
+@sv.on_fullmatch('pixiv日榜')
 async def daily_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='day', title='插画日榜')
 
-@sv.on_fullmatch('插画男性向排行')
+@sv.on_fullmatch('pixiv男性向排行')
 async def male_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='day_male', title='男性向排行榜')
 
-@sv.on_fullmatch('插画女性向排行')
+@sv.on_fullmatch('pixiv女性向排行')
 async def female_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='day_female', title='女性向排行榜')
 
-@sv.on_fullmatch('插画周榜')
+@sv.on_fullmatch('pixiv周榜')
 async def weekly_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='week', title='插画周榜')
 
 
-@sv.on_fullmatch('插画月榜')
+@sv.on_fullmatch('pixiv月榜')
 async def monthly_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='month', title='插画月榜')
 
-@sv.on_fullmatch('插画原画榜')
+@sv.on_fullmatch('pixiv原画榜')
 async def original_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='week_original', title='原画榜')
 
 
-@sv.on_prefix('获取插画', 'pget')
+@sv.on_prefix('pixiv获取插画', 'pget')
 async def fetch_illust(bot, ev: CQEvent):
     """根据作品ID获取插画"""
     if not pget_daily_time_limiter.check(ev.user_id):
