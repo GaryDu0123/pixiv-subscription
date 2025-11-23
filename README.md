@@ -1,24 +1,32 @@
-# Pixiv 画师订阅插件
+# Pixiv 插画推送插件
 
-一个基于 HoshinoBot 的 Pixiv 画师订阅插件，支持自动推送订阅画师的最新作品到群聊。
+一个基于 HoshinoBot 的 Pixiv 插件，包含 **画师订阅** 和 **Pixiv工具** 两个独立的服务，支持自动推送、作品预览、pixiv排行榜查询等功能。
 
 ## 功能特性
 
-- **自动推送**：定时检查订阅画师的最新作品并推送到群聊
-- **权限管理**：支持群管理员设置，普通用户只能查看
-- **R18 控制**：可选择是否推送 R18 内容
-- **标签屏蔽**：支持屏蔽包含特定标签的作品
-- **多画质选择**：支持多种图片画质选项
-- **智能过滤**：根据群设置智能过滤推送内容
-- **批量推送限制**：防止连投时刷屏，可配置最大显示作品数量
+### Pixiv 画师订阅 (`pixiv-subscription`)
+- **自动推送**: 定时检查订阅画师的最新作品并推送到群聊。
+- **权限管理**: 支持群管理员设置订阅、屏蔽规则等。
+- **R18 控制**: 可选择是否推送 R18 内容。
+- **标签屏蔽**: 支持屏蔽包含特定标签的作品。
+
+### Pixiv 工具 (`pixiv-tools`) - <font color="red">默认关闭</font>
+- **作品预览**: 通过画师id或者URL预览画师最新作品。
+- **作品获取**: 通过作品ID或URL获取指定插画。
+- **排行榜**: 获取Pixiv日、周、月、男性向、女性向、原画等多种排行榜。
+- **防刷屏**: 排行榜和画师预览默认使用合并转发消息，避免刷屏。
 
 ## 更新记录
-
-- 2025.10.14 添加了 `pixiv获取插画|pget` 命令
-  - 可以使用插画的id获取指定插画, 并且有每日调用上限可在配置中修改
-  - 修改了 `config.py`和`pixiv.py`两个文件
-- 2025.11.11 让输入画师主页URL也可以订阅和取消订阅, pget可以使用URL获取插图
+- **2025.11.23 给排行榜功能添加频率限制**
+  - 修改了 `pixiv_tools.py`, `config.py` 文件
+- **2025.11.18 插件拆分为 `pixiv-subscription` 和 `pixiv-tools` 两个服务**
+  - 将 `pget` 命令从`pixiv-subscription` 移动到 `pixiv-tools` 服务中
+  - 修改了 `pixiv.py` 文件, 新增 `pixiv_tools.py` 文件
+- **2025.11.11 让输入画师主页URL也可以订阅和取消订阅, pget可以使用URL获取插图**
   - 修改了 `pixiv.py` 文件
+- **2025.10.14 添加了 `pixiv获取插画|pget` 命令**
+  - 可以使用插画的id获取指定插画, 并且有每日调用上限可在配置中修改。
+  - 修改了 `config.py`和`pixiv.py`两个文件。
 
 ## 安装配置
 
@@ -44,19 +52,31 @@
 # 代理设置（可选）
 PROXY_URL = None  # 例如: "http://127.0.0.1:10808"
 
-# 每次推送时最多展示的作品数量
+# 每次推送时最多展示的作品数量，当画师连投（检查时间间隔内发布多个独立作品）时生效，多图作品仅展示首图
 MAX_DISPLAY_WORKS = 3
 
-# 图片画质选择
-# 可选值: 'square_medium', 'medium', 'large', 'original'
-# 注意: original 质量的图片体积较大，可能导致发送失败
+# 可选值: 'square_medium', 'medium', 'large', 'original' (可以大致理解为从小到大)
+# 注意: original质量的图片体积较大，可能导致发送失败
 IMAGE_QUALITY = 'large'
 
-# 检查更新的时间间隔（小时）
-CHECK_INTERVAL_HOURS = 3
+CHECK_INTERVAL_HOURS = 3  # 检查更新的时间间隔，单位为小时
 
-# pixiv获取插画命令每日获取作品的上限
-PGET_DAILY_LIMIT = 10 
+# 单用户pixiv获取插画命令每日获取作品的上限
+PGET_DAILY_LIMIT = 10  
+
+# 单用户预览画师信息命令每日使用上限
+PREVIEW_ILLUSTRATOR_LIMIT = 10  
+
+# 是否启用合并转发回复模式
+CHAIN_REPLY = True  
+
+# 每次推送排行榜时最多展示的作品数量
+RANK_LIMIT = 5  
+
+# 是否启用“推送机器人账号关注的画师”功能
+# 开启后，各群管理员才能通过指令选择是否接收推送
+# 出于隐私和性能考虑，默认关闭
+ENABLE_FOLLOWING_SUBSCRIPTION = False
 ```
 
 ### 3. 使用`pixiv_auth.py`获取 Pixiv Refresh Token
@@ -88,55 +108,46 @@ PGET_DAILY_LIMIT = 10
    更多信息请参考 [pixivpy3 仓库](https://github.com/upbit/pixivpy),
    以及 [@ZipFile Pixiv OAuth Flow](https://gist.github.com/ZipFile/c9ebedb224406f4f11845ab700124362)
 
-## 使用指南
+## Service使用指南
 
-| 命令                             | 权限要求 | 说明                 |
-|--------------------------------|------|--------------------|
-| `pixiv订阅列表`                    | 所有用户 | 查看当前群的订阅列表         |
-| `pixiv群设置`                     | 所有用户 | 查看当前群的设置状态         |
-| `pixiv订阅画师 <画师ID/主页URL>`       | 管理员  | 通过画师id订阅指定画师       |
-| `pixiv取消订阅 <画师ID/主页URL>`       | 管理员  | 取消订阅指定画师           |
-| `pixiv获取插画\|pget <画师ID/主页URL>` | 所有用户 | 获取指定ID的插画（每日有调用上限） |
-| `pixiv开启r18`                   | 管理员  | 本群允许推送 R18 内容      |
-| `pixiv关闭r18`                   | 管理员  | 本群屏蔽 R18 内容        |
-| `pixiv屏蔽tag <标签名>`             | 管理员  | 屏蔽包含指定标签的作品        |
-| `pixiv取消屏蔽tag <标签名>`           | 管理员  | 取消屏蔽指定标签           |
+### Pixiv 画师订阅 (`pixiv-subscription`)
 
-### 超级用户命令
+此服务默认开启，主要用于自动推送画师更新。
+
+| 命令                       | 权限要求 | 说明             |
+|:-------------------------|:-----|:---------------|
+| `pixiv订阅列表`              | 所有用户 | 查看当前群的订阅列表     |
+| `pixiv群设置`               | 所有用户 | 查看订阅相关的群设置     |
+| `pixiv订阅画师 <画师ID/主页URL>` | 管理员  | 订阅指定画师         |
+| `pixiv取消订阅 <画师ID/主页URL>` | 管理员  | 取消订阅指定画师       |
+| `pixiv开启r18`             | 管理员  | 本群允许推送 R18 内容  |
+| `pixiv关闭r18`             | 管理员  | 本群屏蔽 R18 内容    |
+| `pixiv屏蔽tag <标签名>`       | 管理员  | 屏蔽包含指定标签的作品    |
+| `pixiv取消屏蔽tag <标签名>`     | 管理员  | 取消屏蔽指定标签       |
+| `pixiv开启关注推送`            | 管理员  | 向群内推送机器人账号关注的画师新作 |
+| `pixiv关闭关注推送`            | 管理员  | 取消向群内推送机器人账号关注的画师新作 |
+
+#### 超级用户命令
 
 | 命令                       | 权限要求 | 说明                     |
-|--------------------------|------|------------------------|
+|:-------------------------|:-----|:-----------------------|
 | `pixiv重设登录token <token>` | 超级用户 | 设置 Pixiv refresh_token |
-| `pixiv强制检查`              | 超级用户 | 手动触发一次更新检查（测试用）        |
+| `pixiv强制检查`              | 超级用户 | 手动触发一次订阅更新检查（测试用）      |
 
-## 使用示例
+### Pixiv 工具 (`pixiv-tools`)
 
-### 订阅画师
+**注意: 此服务默认关闭，手动在需要群中开启**
 
-```
-# 订阅画师（需要知道画师的用户ID）例如: 用户https://www.pixiv.net/users/73798
-pixiv订阅画师 73798
-pixiv订阅画师 https://www.pixiv.net/users/73798
-
-# 查看订阅列表
-pixiv订阅列表
-
-# 查看群设置
-pixiv群设置
-
-# 取消订阅
-pixiv取消订阅 12345678
-
-# 屏蔽标签 (tag应为pixiv上的日文标准标签)
-pixiv屏蔽tag 巨乳
-```
-
-## 工作原理
-
-1. **定时检查**：插件会根据 `CHECK_INTERVAL_HOURS` 设置的间隔时间自动检查订阅画师的新作品
-2. **作品过滤**：根据每个群的设置（R18开关、屏蔽标签）过滤推送内容
-3. **防刷屏**：当画师在检查间隔内发布多个作品时，最多只显示 `MAX_DISPLAY_WORKS` 个作品，其余以文字提示
-4. **错误处理**：包含登录失效自动重试、网络异常处理等机制
+| 命令                             | 权限要求 | 说明         |
+|:-------------------------------|:-----|:-----------|
+| `pixiv预览画师 <画师ID/主页URL>`       | 所有用户 | 预览画师最新作品   |
+| `pixiv获取插画\|pget <作品ID/作品URL>` | 所有用户 | 获取指定ID的插画  |
+| `pixiv日榜`                      | 所有用户 | 获取插画日榜     |
+| `pixiv周榜`                      | 所有用户 | 获取插画周榜     |
+| `pixiv月榜`                      | 所有用户 | 获取插画月榜     |
+| `pixiv男性向排行`                   | 所有用户 | 获取男性向插画排行榜 |
+| `pixiv女性向排行`                   | 所有用户 | 获取女性向插画排行榜 |
+| `pixiv原画榜`                     | 所有用户 | 获取原画榜      |
 
 ## 注意事项
 
@@ -151,16 +162,14 @@ pixiv-subscription/
 ├── config.py           # 配置文件
 ├── requiements.txt     # 依赖列表
 ├── pixiv_auth.py       # 用于获取refresh_token的脚本
+├── pixiv_tools.py      # pixiv-tools服务主文件
+├── pixiv.py            # pixiv-subscription服务主文件
 ├── refresh-token.json  # Pixiv 认证信息, 需要在这里填写 refresh_token
 └── subscriptions.json  # 群组订阅数据以及设置（启动后自动生成）
 ```
 
 ## Future Plans
 
-- 目前[插件列表](https://github.com/pcrbot/HoshinoBot-plugins-index)
-  已经有[P站搜索](https://github.com/scofieldle/LeoBot/tree/main/hoshino/modules/pixiv_new)插件,
-  提供了搜索画师作品和查看日月榜单等功能, 但是我加入的群中其实并没有太大的使用需求, 不清楚是否需要这个功能?
-  如果有需要的话确实可以考虑将两个插件合并
 - pixivpy3会通过`refresh_token`来获取`access_token`, 后续的请求都是携带`access_token`进行的, 但`access_token`
   的有效期只有[1+小时](https://github.com/upbit/pixivpy/issues/182), 所以在不做任何处理的情况下, 过一段时间后就会出现登陆失效的情况.
   目前采用的策略是直接进行api的请求, 如果发现请求失败则使用`api.login(refresh_token)`来重新登陆, 但是作为时长大于3小时的定时任务来说,

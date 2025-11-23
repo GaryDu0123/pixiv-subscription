@@ -4,17 +4,12 @@ import json
 import asyncio
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union, Any, Coroutine
 import nonebot
 from hoshino import Service, priv
 from hoshino.typing import CQEvent
 from pixivpy3 import AppPixivAPI
-from .config import PROXY_URL, MAX_DISPLAY_WORKS, IMAGE_QUALITY, CHECK_INTERVAL_HOURS
-from hoshino.util import DailyNumberLimiter
-try:
-    from .config import PGET_DAILY_LIMIT
-except ImportError:
-    PGET_DAILY_LIMIT = 10  # 兼容旧配置
+from .config import PROXY_URL, MAX_DISPLAY_WORKS, IMAGE_QUALITY, CHECK_INTERVAL_HOURS, ENABLE_FOLLOWING_SUBSCRIPTION
 import aiohttp
 import zipfile
 import io
@@ -25,7 +20,7 @@ import uuid
 # 插件配置
 PIXIV_REFRESH_TOKEN_PATH = os.path.join(os.path.dirname(__file__), 'refresh-token.json')
 PIXIV_SUBSCRIPTION_PATH = os.path.join(os.path.dirname(__file__), 'subscriptions.json')
-pget_daily_time_limiter = DailyNumberLimiter(PGET_DAILY_LIMIT)
+
 
 if IMAGE_QUALITY not in ['large', 'medium', 'square_medium', 'original']:
     IMAGE_QUALITY = 'large'  # 默认值
@@ -39,8 +34,9 @@ HELP_TEXT = """
 [pixiv关闭r18] 屏蔽R18内容
 [pixiv屏蔽tag tag名] 屏蔽包含指定tag的作品
 [pixiv取消屏蔽tag tag名] 取消屏蔽指定tag
+[pixiv开启关注推送] 订阅机器人账号关注的全部画师
+[pixiv关闭关注推送] 取消订阅机器人账号关注的画师
 [pixiv群设置] 查看当前群的设置
-[pixiv获取插画|pget 作品ID/作品URL] 通过作品ID或URL获取指定作品
 """.strip()
 
 # 创建服务
@@ -124,8 +120,12 @@ class PixivSubscriptionManager:
             self.subscriptions[group_id] = {
                 'artists': [],
                 'r18_enabled': False,
-                'blocked_tags': []
+                'blocked_tags': [],
+                'push_following_enabled': False
             }
+        # 兼容旧配置，如果旧配置没有这个键则添加默认值
+        elif 'push_following_enabled' not in self.subscriptions[group_id]:
+            self.subscriptions[group_id]['push_following_enabled'] = False
 
     def add_subscription(self, group_id: str, user_id: str) -> bool:
         """添加订阅"""
@@ -163,6 +163,18 @@ class PixivSubscriptionManager:
             return self.subscriptions[group_id].get('r18_enabled', False)
         return False
 
+    def set_push_following(self, group_id: str, enabled: bool) -> None:
+        """设置群的 关注画师推送 开关"""
+        self.ensure_group_settings(group_id)
+        self.subscriptions[group_id]['push_following_enabled'] = enabled
+        self.save_subscriptions()
+
+    def is_push_following_enabled(self, group_id: str) -> bool:
+        """检查群是否开启了 关注画师推送"""
+        if group_id in self.subscriptions:
+            return self.subscriptions[group_id].get('push_following_enabled', False)
+        return False
+
     def add_blocked_tag(self, group_id: str, tag: str) -> bool:
         """添加屏蔽tag"""
         self.ensure_group_settings(group_id)
@@ -190,16 +202,14 @@ class PixivSubscriptionManager:
 
     def get_group_settings(self, group_id: str) -> Dict:
         """获取群设置"""
-        if group_id in self.subscriptions:
-            return self.subscriptions[group_id]
-        return {
-            'artists': [],
-            'r18_enabled': False,
-            'blocked_tags': []
-        }
+        self.ensure_group_settings(group_id)
+        return self.subscriptions[group_id]
 
-    def is_illust_allowed(self, illust: dict, group_id: str) -> bool:
+
+    def is_illust_allowed(self, illust: dict, group_id: Union[str, int]) -> bool:
         """检查作品是否允许在指定群推送"""
+        if isinstance(group_id, int):
+            group_id = str(group_id)
         # 检查R18限制
         if not self.is_r18_enabled(group_id):
             # x_restrict: 0=全年龄, 1=R18, 2=R18G
@@ -297,6 +307,92 @@ class PixivSubscriptionManager:
             sv.logger.error(f"获取作品详情失败: {e}")
             return {}
 
+    async def get_ranking(self, mode: str) -> Union[Dict[Any, Any]]:
+        """
+        用于获取并发送指定模式的排行榜。
+        :param mode: 排行榜模式 (e.g., 'day', 'week_r18')
+        """
+        try:
+            result = await self.__exec_and_retry_with_login(
+                self.api.illust_ranking,
+                mode
+            )
+
+            if not isinstance(result, dict) or 'illusts' not in result or not result['illusts']:
+                sv.logger.error(f"获取Pixiv排行榜失败 '{mode}': {result}")
+                return {}
+
+            # 成功获取，返回作品列表
+            return result.get('illusts', {})
+
+        except Exception as e:
+            # 捕获其他意外错误，例如网络问题
+            sv.logger.error(f"获取Pixiv排行榜时发生未知异常 '{mode}': {e}")
+            return {}
+
+    async def user_illusts(self, user_id: Union[str, int]):
+        """
+        获取指定用户的作品列表, api限制默认获取前30个作品
+        :param user_id: 画师用户ID
+        """
+        try:
+            result = await self.__exec_and_retry_with_login(
+                self.api.user_illusts,
+                user_id
+            )
+
+            if not isinstance(result, dict) or 'illusts' not in result or not result['illusts']:
+                sv.logger.error(f"获取Pixiv用户作品列表失败 '{user_id}': {result}")
+                return {}, {}
+
+            # 成功获取，返回作品列表
+            return result.get('illusts', {}), result.get('user', {})
+        except Exception as e:
+            sv.logger.error(f"获取Pixiv用户作品列表时发生未知异常 '{user_id}': {e}")
+            return {}, {}
+
+    async def get_illust_follow(self, start_time: datetime, interval_hours: float) -> List[Dict]:
+        """
+        获取当前bot关注画师在指定时间窗口内的新作品。
+        API本身返回最近作品，此函数在此基础上进行时间过滤。
+        """
+        try:
+            # 调用API获取原始的关注动态列表
+            result = await self.__exec_and_retry_with_login(
+                self.api.illust_follow
+            )
+
+            # 检查API返回是否有效
+            if not isinstance(result, dict) or 'illusts' not in result or not result.get('illusts'):
+                sv.logger.error(f"获取Pixiv关注作品列表失败或列表为空: {result}")
+                return []  # 失败或无内容时返回空列表
+
+            # 准备时间和用于存放结果的容器
+            check_start = start_time - timedelta(hours=interval_hours)
+            check_end = start_time
+            new_illusts_in_window = []
+
+            # 遍历API返回的所有作品，并根据时间窗口进行过滤
+            for illust in result['illusts']:
+                try:
+                    # 解析作品创建时间字符串
+                    create_date_utc = datetime.fromisoformat(illust['create_date']).astimezone(timezone.utc)
+
+                    # 判断作品是否在检查时间窗口内
+                    if check_start < create_date_utc <= check_end:
+                        new_illusts_in_window.append(illust)
+
+                except (ValueError, TypeError, KeyError) as e:
+                    sv.logger.warning(f"解析或过滤关注作品时跳过一个项目: {e}, 作品ID: {illust.get('id')}")
+                    continue
+            # 返回经过时间过滤后的新作品列表
+            return new_illusts_in_window
+
+        except Exception as e:
+            sv.logger.error(f"获取Pixiv关注作品时发生未知异常: {e}")
+            return []  # 确保任何未知异常都返回一个安全的空列表
+
+
     @staticmethod
     async def download_image_as_base64(url: str) -> str:
         """下载图片并转换为base64编码"""
@@ -308,15 +404,16 @@ class PixivSubscriptionManager:
 
             async with aiohttp.ClientSession(
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=60)
+                    timeout=aiohttp.ClientTimeout(total=30)
             ) as session:
                 async with session.get(url, proxy=PROXY_URL) as resp:
                     # 对图片数据进行处理，确保图相同数据不同，以防被屏蔽
                     if resp.status == 200:
+                        # todo 图片处理部分
                         image_data = await resp.read()
                         # 生成随机不重复数据（这里用作种子）
                         random.seed(str(uuid.uuid4()))  # 确保不重复
-                        
+
                         # 使用 PIL 修改像素
                         img_buffer = io.BytesIO(image_data)
                         img = Image.open(img_buffer)
@@ -326,12 +423,12 @@ class PixivSubscriptionManager:
                         x, y = random.randint(0, width-1), random.randint(0, height-1)
                         r, g, b = pixels[x, y][:3]  # 假设 RGB
                         pixels[x, y] = (r + 1 % 256, g, b)  # 微调
-                        
+
                         # 保存回缓冲区
                         output_buffer = io.BytesIO()
                         img.save(output_buffer, format=img.format)
                         modified_data = output_buffer.getvalue()
-                        
+
                         b64_data = base64.b64encode(modified_data).decode('utf-8')
                         return b64_data
                     else:
@@ -344,11 +441,12 @@ class PixivSubscriptionManager:
 
     @staticmethod
     def get_image_urls(illust: dict) -> str:
+        # todo 图片解析需要处理original
         """获取作品的所有图片URL（正确处理单页和多页）"""
         urls = []
-        
+
         page_count = illust.get('page_count', 1)
-        
+
         if page_count > 1:
             # 多页作品：从 meta_pages 中提取每个页面的 original URL
             meta_pages = illust.get('meta_pages', [])
@@ -365,12 +463,12 @@ class PixivSubscriptionManager:
             original_url = meta_single_page.get('original_image_url')
             if original_url:
                 urls.append(original_url)
-        
+
         if not urls:
             sv.logger.error(f"未找到任何图片URL for illust {illust.get('id')}. Illust data: {illust}")  # 添加调试日志
-        
+
         return urls  # 返回列表，即使单张也是 [url]
-        
+
     # 新方法：下载Ugoira并合成GIF base64
     async def download_ugoira_as_gif_base64(self, illust) -> str:
         """下载Ugoira ZIP，合成GIF，转为base64"""
@@ -379,14 +477,14 @@ class PixivSubscriptionManager:
         if not illust_id:
             sv.logger.error("未找到 illust_id")
             return ""
-        
+
         try:
             # 调用 Pixiv API 获取 Ugoira 元数据（同步调用，无 await）
             metadata = self.api.ugoira_metadata(illust_id)
             if not metadata or 'ugoira_metadata' not in metadata:
                 sv.logger.error(f"获取 Ugoira 元数据失败 for illust {illust_id}")
                 return ""
-            
+
             zip_urls = metadata['ugoira_metadata'].get('zip_urls', {})
             zip_url = zip_urls.get('medium') # 优先 medium 分辨率（较小），或 original
             if not zip_url or not zip_url.endswith('.zip'):
@@ -397,7 +495,7 @@ class PixivSubscriptionManager:
                     b64_data = await self.download_image_as_base64(fallback_url)  # 使用现有下载方法
                     return b64_data if b64_data else ""
                 return ""
-            
+
             # 下载 ZIP
             headers = {
                 'Referer': 'https://www.pixiv.net/',
@@ -408,13 +506,13 @@ class PixivSubscriptionManager:
                     if resp.status != 200:
                         sv.logger.error(f"下载Ugoira ZIP失败, HTTP {resp.status}: {zip_url}")
                         return ""
-                    
+
                     zip_data = await resp.read()
                     with io.BytesIO(zip_data) as zip_buffer:
                         with zipfile.ZipFile(zip_buffer) as zip_file:
                             # 提取元数据（延迟）从 API 返回中取
                             frames_info = metadata['ugoira_metadata'].get('frames', [])[:MAX_FRAMES]
-                            
+
                             # 提取帧
                             images = []
                             durations = []
@@ -424,28 +522,28 @@ class PixivSubscriptionManager:
                                     img = Image.open(io.BytesIO(frame_file.read()))
                                     images.append(img)
                                 durations.append(frames_info[i]['delay'] if i < len(frames_info) else 100)  # 默认100ms
-                            
+
                             if not images:
                                 sv.logger.error("未提取到Ugoira帧")
                                 return ""
-                            
+
                             # 对gif轻微修改像素（确保字节流不重复），以防屏蔽
                             try:
                                 # 生成随机不重复种子（使用 UUID）
                                 random.seed(str(uuid.uuid4()))
-                                
+
                                 # 随机选择一帧进行修改
                                 frame_to_modify = random.randint(0, len(images) - 1)
                                 img_to_modify = images[frame_to_modify]
-                                
+
                                 # 获取像素访问器
                                 pixels = img_to_modify.load()
                                 width, height = img_to_modify.size
-                                
+
                                 # 随机选择一个像素位置（优先边缘）
                                 x = random.randint(0, width - 1)
                                 y = random.randint(0, height - 1)
-                                
+
                                 # 假设 RGB/RGBA 模式，微调一个通道（例如红色 +1，循环到 0-255）
                                 if img_to_modify.mode in ('RGB', 'RGBA'):
                                     r, g, b = pixels[x, y][:3]
@@ -457,15 +555,15 @@ class PixivSubscriptionManager:
                                     # 其他模式：跳过修改
                                     sv.logger.warning(f"跳过像素修改：不支持的图像模式 {img_to_modify.mode}")
                                     pass
-                                
+
                                 # 更新回列表
                                 images[frame_to_modify] = img_to_modify
-                                
+
                                 sv.logger.info(f"已修改帧 {frame_to_modify} 的像素 ({x}, {y}) 以确保字节流唯一")
                             except Exception as e:
                                 sv.logger.error(f"像素修改失败: {e}，使用原始帧")
                                 # 回退：不修改，继续使用原始 images
-                            
+
                             # 合成GIF（无限循环）
                             gif_buffer = io.BytesIO()
                             images[0].save(gif_buffer, format='GIF', save_all=True, append_images=images[1:], duration=durations, loop=0)
@@ -475,7 +573,7 @@ class PixivSubscriptionManager:
                                 first_frame_bytes = io.BytesIO()
                                 images[0].save(first_frame_bytes, format='JPEG')
                                 return base64.b64encode(first_frame_bytes.getvalue()).decode('utf-8')
-                            
+
                             return base64.b64encode(gif_bytes).decode('utf-8')
         except zipfile.BadZipFile as e:
             sv.logger.error(f"ZIP文件无效: {e}, URL: {zip_url}")
@@ -483,8 +581,8 @@ class PixivSubscriptionManager:
         except Exception as e:
             sv.logger.error(f"处理Ugoira异常: {e}, illust_id: {illust_id}")
             return ""
-    
-    
+
+
     @staticmethod
     def is_auth_error(exception) -> bool:
         """判断是否是认证相关的错误"""
@@ -604,7 +702,7 @@ async def list_subscriptions(bot, ev: CQEvent):
     if not subscriptions:
         await bot.send(ev, "当前群没有订阅任何画师")
         return
-
+    # todo
     # 构建列表：为每个 user_id 获取名字
     sub_list = []
     for user_id in subscriptions:
@@ -637,6 +735,31 @@ async def set_pixiv_token(bot, ev: CQEvent):
     success, msg = manager.login(refresh_token)
     await bot.send(ev, msg)
 
+@sv.on_prefix('pixiv开启关注推送')
+async def enable_push_following(bot, ev: CQEvent):
+    """开启机器人账号关注画师的推送 (仅管理员)"""
+    if not priv.check_priv(ev, priv.ADMIN):
+        await bot.send(ev, "只有群主或管理员才能设置此项")
+        return
+
+    if not ENABLE_FOLLOWING_SUBSCRIPTION:
+        await bot.send(ev, "该功能已被维护组全局关闭")
+        return
+
+    group_id = str(ev.group_id)
+    manager.set_push_following(group_id, True)
+    await bot.send(ev, "本群将会收到账号关注画师的更新")
+
+@sv.on_prefix('pixiv关闭关注推送')
+async def disable_push_following(bot, ev: CQEvent):
+    """关闭机器人账号关注画师的推送 (仅管理员)"""
+    if not priv.check_priv(ev, priv.ADMIN):
+        await bot.send(ev, "只有群主或管理员才能设置此项")
+        return
+
+    group_id = str(ev.group_id)
+    manager.set_push_following(group_id, False)
+    await bot.send(ev, "已关闭关注推送")
 
 @sv.on_prefix('pixiv开启r18')
 async def enable_r18(bot, ev: CQEvent):
@@ -710,6 +833,10 @@ async def show_group_settings(bot, ev: CQEvent):
     msg += f"📋 订阅画师数量: {len(settings['artists'])}\n"
     msg += f"🔞 R18推送: {'开启' if settings['r18_enabled'] else '关闭'}\n"
 
+    if ENABLE_FOLLOWING_SUBSCRIPTION:
+        following_status = '开启' if settings.get('push_following_enabled', False) else '关闭'
+        msg += f"💖 关注画师推送: {following_status}\n"
+
     blocked_tags = settings['blocked_tags']
     if blocked_tags:
         msg += f"🚫 屏蔽tag: {', '.join(blocked_tags)}"
@@ -718,99 +845,7 @@ async def show_group_settings(bot, ev: CQEvent):
 
     await bot.send(ev, msg)
 
-#更新支持多图输出和动图输出，图片数量多于20则分批发送，保证每次消息的图片数量最多为20
-@sv.on_prefix('pixiv获取插画', 'pget')
-async def fetch_illust(bot, ev: CQEvent):
-    """根据作品ID获取插画，支持分开发送多张图片（每条消息最多20张）"""
-    if not pget_daily_time_limiter.check(ev.user_id):
-        return await bot.send(ev, f"❌ 获取插画的次数已达上限")
-
-    input_text = ev.message.extract_plain_text().strip()
-    if not input_text:
-        return await bot.send(ev, "请输入作品ID或作品链接")
-
-    # 尝试从URL中提取ID
-    match = re.search(r'/artworks/(\d+)', input_text)
-    if match:
-        illust_id = match.group(1)
-    else:
-        illust_id = input_text
-
-    if not illust_id.isdigit():
-        return await bot.send(ev, "无效的作品ID或链接")
-
-    # 获取 illust 数据
-    illust = await manager.get_illust_by_id(illust_id)
-    if not illust:
-        return await bot.send(ev, f"作品ID {illust_id} 被吞掉啦~")
-
-    # 提取信息
-    title = illust.get('title', '无标题')
-    user_info = illust.get('user')
-    artist_name = user_info['name'] if user_info else f"作品ID {illust_id}"
-    tags = illust.get('tags', [])
-
-    # 构建消息列表
-    MAX_IMAGES_PER_MESSAGE = 20  # 每条消息的最大图片数，qq每次消息的图片数量上限，请勿大于20
-    messages = []  # 最终消息列表
-    current_msg_parts = [f"🎨 {title}", f"🖌️ {artist_name}", f"🏷️ {', '.join([tag.get('name', '') for tag in tags[:3] if tag.get('name')])}"]
-    image_count = 0  # 当前消息的图片计数
-    part_index = 1   # 消息分页索引
-
-    illust_type = illust.get('type', 'illust')
-
-    if illust_type == 'ugoira':
-        b64_gif = await manager.download_ugoira_as_gif_base64(illust)
-        if b64_gif:
-            current_msg_parts.append(f"\n[CQ:image,file=base64://{b64_gif}]")  # 发送GIF，计为1张
-            image_count += 1
-        else:
-            current_msg_parts.append("\n❌ 无法合成Ugoira动图")
-    else:
-        # 原有静态图片逻辑
-        image_urls = manager.get_image_urls(illust)
-        if not image_urls:
-            current_msg_parts.append("\n❌ 未找到图片URL")
-        else:
-            downloaded_images = []
-            for url in image_urls:
-                b64_data = await manager.download_image_as_base64(url)
-                if b64_data:
-                    # 检查是否需要分割消息
-                    if image_count >= MAX_IMAGES_PER_MESSAGE:
-                        # 当前消息已满，添加分页提示并保存
-                        if part_index > 1:
-                            current_msg_parts.append(f"\n（第 {part_index} 部分，继续查看下一条消息）")
-                        messages.append('\n'.join(current_msg_parts))
-                        part_index += 1
-                        # 重置当前消息，添加续上下文
-                        current_msg_parts = [f"🎨 {title}（续）", f"🖌️ {artist_name}"]
-                        image_count = 0
-
-                    current_msg_parts.append(f"\n[CQ:image,file=base64://{b64_data}]")
-                    image_count += 1
-                else:
-                    sv.logger.error(f"图片下载失败: {url}")
-                    current_msg_parts.append("\n❌ 图片下载失败")
-
-    # 添加最后一条消息（如果有内容）
-    if current_msg_parts:
-        if part_index > 1:
-            current_msg_parts.append(f"\n（第 {part_index} 部分，结束）")
-        messages.append('\n'.join(current_msg_parts))
-
-    # 如果没有成功构建任何消息，返回错误
-    if not messages:
-        return await bot.send(ev, "❌ 所有图片下载失败")
-
-    # 循环发送消息
-    for msg in messages:
-        await bot.send(ev, msg, timeout=60)
-        await asyncio.sleep(1)  # 延迟1秒，避免风控
-
-    # 只在成功发送后增加计数
-    pget_daily_time_limiter.increase(ev.user_id)
-    return await bot.send(ev, '\n'.join(msg_parts), timeout=60)
+# todo pget 被移动到了pixivtools中
 
 
 @sv.on_prefix('pixiv强制检查')
@@ -853,7 +888,7 @@ async def construct_group_message(bot, group_id: int, artist_name: str, filtered
     for i, illust in enumerate(total_illusts_to_show):
         title = illust.get('title', '无标题')
         tags = [tag.get('name', '') for tag in illust.get('tags', [])[:3] if tag.get('name')]
-        
+
         illust_info_parts = [f"\n\n📖 {title}"]
         if tags:
             illust_info_parts.append(f"\n🏷️ {', '.join(tags)}")
@@ -863,7 +898,7 @@ async def construct_group_message(bot, group_id: int, artist_name: str, filtered
         # 预先获取图片URL或处理动图
         image_b64_list = []
         is_ugoira_failed = False
-        
+
         if illust_type == 'ugoira':
             b64_gif = await manager.download_ugoira_as_gif_base64(illust)
             if b64_gif:
@@ -896,11 +931,11 @@ async def construct_group_message(bot, group_id: int, artist_name: str, filtered
 
         # 将作品信息添加到当前消息
         current_msg_parts.extend(illust_info_parts)
-        
+
         # 处理图片和错误信息
         if is_ugoira_failed:
             current_msg_parts.append("\n❌ 无法合成Ugoira动图")
-        
+
         if not image_b64_list and illust_type != 'ugoira':
              current_msg_parts.append("\n❌ 图片下载失败或未找到URL")
         else:
@@ -938,8 +973,57 @@ async def construct_group_message(bot, group_id: int, artist_name: str, filtered
     return ""
 
 #调整更新发送方式以适应多图分割发送
+async def process_and_send_updates(bot, user_id: str, artist_name: str, new_illusts: List[Dict], target_group_ids: set):
+    """
+    一个辅助函数, 负责处理单个画师的更新并发送给所有目标群组。
+    发送单个画师的新作, 为每个群组每个独立过滤作品、构造消息并发送。
+
+    :param bot: Bot实例
+    :param user_id: 画师ID
+    :param artist_name: 画师名字
+    :param new_illusts: 该画师的新作品列表
+    :param target_group_ids: 需要被通知的群组ID集合
+    """
+    if not new_illusts:
+        return  # 如果没有新作品，直接返回
+
+    # 向所有订阅了该画师的群组发送消息（根据群设置过滤内容）
+    for group_id in target_group_ids:
+        try:
+            # 根据群设置过滤作品
+            filtered_illusts = [
+                illust for illust in new_illusts if manager.is_illust_allowed(illust, group_id)
+            ]
+
+            # 如果过滤后没有符合条件的作品，则跳过这个群
+            if not filtered_illusts:
+                continue
+
+            await bot.send_group_msg(
+                group_id=int(group_id),
+                message=await construct_group_message(artist_name, filtered_illusts)
+            )
+            # 避免发送消息过快被限制
+            await asyncio.sleep(1)
+
+        except Exception as e:
+            sv.logger.error(f"向群 {group_id} 发送画师 {user_id} ({artist_name}) 更新消息时出错: {e}")
+            continue
+
+# todo 处理多图发送
 @sv.scheduled_job('interval', hours=CHECK_INTERVAL_HOURS)
 async def check_updates():
+    """
+    发送画师订阅的更新作品到对应群组的任务
+
+    实现思路:
+    1. user_follow的获取到的画师更新的作品实际上是和在当前时间窗口内用画师ID获取的作品列表是一样的, 所以需要去重
+    2. 根据避免频繁请求API的原则, 对每个画师只请求一次, 也就是说在user_follow推送之后就不需要用画师ID去请求一次了
+    3. 构建一个画师ID到订阅群列表的映射表
+    4. user_follow获取到时间窗口内的更新之后, 根据群设置过滤内容, 然后根据群是否订阅该画师和是否推送bot关注画师为条件来决定是否发送消息,
+        将发送过的画师ID从映射表中删除
+    5. 剩下的画师ID再用画师ID去请求一次, 这样就避免了重复请求和重复发送消息的问题
+    """
     start_time = datetime.now()
 
     bot = nonebot.get_bot()
@@ -947,7 +1031,7 @@ async def check_updates():
     # 计算本次检查的时间窗口 - 以当前时间为结束点，向前检查CHECK_INTERVAL_HOURS的小时数
     check_time = datetime.now(timezone.utc)
 
-    # 收集所有需要检查的画师ID，并记录哪些群订阅了哪些画师
+    # 收集所有需要检查的画师ID，并记录画师被哪些群订阅
     artist_to_groups = {}  # {artist_id: [group_id1, group_id2, ...]}
 
     for group_id, group_data in manager.subscriptions.items():
@@ -957,51 +1041,59 @@ async def check_updates():
                 artist_to_groups[user_id] = []
             artist_to_groups[user_id].append(group_id)
 
-    if not artist_to_groups:  # 没有订阅任何画师
-        return
+    # 处理关注推送 (如果开启)
+    if ENABLE_FOLLOWING_SUBSCRIPTION:
+        groups_enabling_following = {
+            group_id for group_id, setting in manager.subscriptions.items()
+            if setting.get('push_following_enabled', False)
+        }
 
-    # 对每个画师只请求一次
+        # 获取关注画师在时间窗口内的新作品
+        followed_illusts = await manager.get_illust_follow(
+            start_time=check_time,
+            interval_hours=CHECK_INTERVAL_HOURS
+        )
+
+        # 按画师ID分组作品
+        bot_followed_illusts = {}
+        for illust in followed_illusts:
+            user_id = str(illust['user']['id'])
+            if user_id not in bot_followed_illusts:
+                bot_followed_illusts[user_id] = {'user': illust['user'], 'illusts': []}
+            bot_followed_illusts[user_id]['illusts'].append(illust)
+
+        # 处理并发送关注画师的更新
+        for user_id, data in bot_followed_illusts.items():
+            artist_name = data['user']['name']
+            new_illusts = data['illusts']
+
+            # 计算需要通知的所有群组：订阅了该画师的 + 开启了全局关注推送的
+            target_group_ids = set(artist_to_groups.get(user_id, [])) | groups_enabling_following
+
+            await process_and_send_updates(bot, user_id, artist_name, new_illusts, target_group_ids)
+
+            # 从待检查列表中移除，避免重复请求
+            if user_id in artist_to_groups:
+                del artist_to_groups[user_id]
+
+    # 处理剩下的、未被关注推送覆盖的画师
     for user_id, group_ids in artist_to_groups.items():
         try:
-            # 使用精确的时间窗口获取新作品
             user_info, new_illusts = await manager.get_new_illusts_with_user_info(
                 user_id,
                 start_time=check_time,
                 interval_hours=CHECK_INTERVAL_HOURS
             )
 
-            artist_name = user_info['name'] if user_info else f"画师ID:{user_id}"
-
-            # 如果没有新作品，跳过
             if not new_illusts:
-                sv.logger.info(f"{artist_name} 没有新作品，跳过")
-                await asyncio.sleep(3) # 避免频繁请求API
+                sv.logger.info(f"画师 {user_id} 没有新作品，跳过")
+                await asyncio.sleep(3)
                 continue
 
-            # 向所有订阅了该画师的群组发送消息（根据群设置过滤内容）
-            for group_id in group_ids:
-                try:
-                    # 根据群设置过滤作品
-                    filtered_illusts = []
-                    for illust in new_illusts:
-                        is_allowed = manager.is_illust_allowed(illust, group_id)
-                        if is_allowed:
-                            filtered_illusts.append(illust)
+            artist_name = user_info.get('name', f"画师ID:{user_id}")
 
-                    # 如果过滤后没有作品，跳过这个群
-                    if not filtered_illusts:
-                        continue
-                    
-                    await construct_group_message(bot, int(group_id), artist_name, filtered_illusts)
-                    
-                    # 避免发送消息过快被限制
-                    await asyncio.sleep(1)
+            await process_and_send_updates(bot, user_id, artist_name, new_illusts, set(group_ids))
 
-                except Exception as e:
-                    sv.logger.error(f"向群 {group_id} 发送画师 {user_id} 更新消息时出错: {e}")
-                    continue
-
-            # 避免频繁请求API
             sv.logger.info(f"画师 {user_id} 处理完成，等待3秒...")
             await asyncio.sleep(3)
         except Exception as e:
