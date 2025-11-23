@@ -17,7 +17,8 @@
 - **防刷屏**: 排行榜和画师预览默认使用合并转发消息，避免刷屏。
 
 ## 更新记录
-
+- **2025.11.23 给排行榜功能添加频率限制**
+  - 修改了 `pixiv_tools.py`, `config.py` 文件
 - **2025.11.18 插件拆分为 `pixiv-subscription` 和 `pixiv-tools` 两个服务**
   - 将 `pget` 命令从`pixiv-subscription` 移动到 `pixiv-tools` 服务中
   - 修改了 `pixiv.py` 文件, 新增 `pixiv_tools.py` 文件

@@ -8,17 +8,18 @@ from hoshino.typing import CQEvent
 from .pixiv import manager
 from hoshino.config import NICKNAME
 from typing import List
-from hoshino.util import DailyNumberLimiter
+from hoshino.util import DailyNumberLimiter, FreqLimiter
 from .config import MAX_DISPLAY_WORKS
 try:
-    from .config import CHAIN_REPLY, RANK_LIMIT, PGET_DAILY_LIMIT, PREVIEW_ILLUSTRATOR_LIMIT
+    from .config import CHAIN_REPLY, RANK_LIMIT, PGET_DAILY_LIMIT, PREVIEW_ILLUSTRATOR_LIMIT, RANK_CD_MINUTES
 except ImportError:
     CHAIN_REPLY = True  # 默认启用合并转发回复模式
     RANK_LIMIT = 5     # 默认展示排行榜作品数量为5
     PGET_DAILY_LIMIT = 10  # 兼容旧配置
     PREVIEW_ILLUSTRATOR_LIMIT = 10
+    RANK_CD_MINUTES = 60
 
-
+limiter = FreqLimiter(RANK_CD_MINUTES)  # 每60秒限制一次请求
 pget_daily_time_limiter = DailyNumberLimiter(PGET_DAILY_LIMIT)
 preview_illustrator_limiter = DailyNumberLimiter(PREVIEW_ILLUSTRATOR_LIMIT)
 
@@ -83,6 +84,12 @@ async def send_ranking(bot, ev: CQEvent, mode: str, title: str):
     Sends ranking images, gets ranking data for the specified mode,
     and uses the send_messages function to send them.
     """
+    group_id = str(ev.group_id)
+    if not limiter.check(group_id):
+        limiter.left_time(group_id)
+        await bot.finish(ev, f"Pixiv排行榜请求过于频繁，请稍后再试~")
+        return
+    limiter.start_cd(group_id)
     await bot.send(ev, f"正在获取Pixiv{title}，请稍候...")
 
     # 获取排行榜数据
