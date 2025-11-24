@@ -33,3 +33,6 @@ UGOIRA_IMAGE_MODE = "GIF"
 
 # 发送的动图的文件大小限制, 单位: MB, 超过限制将不发送动图而改为发送静态封面图
 UGOIRA_IMAGE_SIZE_LIMIT = 30
+
+# 动图最大帧数限制
+UGORIA_MAX_FRAMES = 600

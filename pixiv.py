@@ -10,7 +10,7 @@ from hoshino import Service, priv
 from hoshino.typing import CQEvent
 from pixivpy3 import AppPixivAPI
 from .config import PROXY_URL, MAX_DISPLAY_WORKS, IMAGE_QUALITY, CHECK_INTERVAL_HOURS, ENABLE_FOLLOWING_SUBSCRIPTION, \
-    ENABLE_PIXEL_NOISE, UGOIRA_IMAGE_MODE, UGOIRA_IMAGE_SIZE_LIMIT
+    ENABLE_PIXEL_NOISE, UGOIRA_IMAGE_MODE, UGOIRA_IMAGE_SIZE_LIMIT, UGORIA_MAX_FRAMES
 import aiohttp
 import zipfile
 import io
@@ -434,7 +434,7 @@ class PixivSubscriptionManager:
 
     @staticmethod
     async def download_image_as_base64(url: str) -> str:
-        """下载图片并转换为base64编码（可选进行轻微像素修改）"""
+        """下载图片并转换为base64编码, 根据ENABLE_PIXEL_NOISE配置项决定是否进行像素修改"""
         try:
             headers = {
                 'Referer': 'https://www.pixiv.net/',
@@ -476,7 +476,7 @@ class PixivSubscriptionManager:
     @staticmethod
     def get_image_urls(illust: dict) -> List[str]:
         """
-        获取作品的所有图片URL,
+        获取作品的所有图片URL
         """
         urls: List[str] = []
         page_count = illust.get('page_count', 1)
@@ -510,11 +510,10 @@ class PixivSubscriptionManager:
                 urls.append(url)
         return urls
 
-    # 新方法：下载Ugoira并合成GIF base64
     # 下载Ugoira并合成GIF base64
     @staticmethod
     async def _download_ugoira_zip(zip_url: str) -> bytes:
-        """辅助方法：下载Ugoira的ZIP文件"""
+        """下载Ugoira的ZIP文件"""
         headers = {
             'Referer': 'https://www.pixiv.net/',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -533,7 +532,6 @@ class PixivSubscriptionManager:
     @staticmethod
     def _process_ugoira_zip_to_gif(zip_data: bytes, frames_info: list) -> bytes:
         """辅助方法：解压ZIP并合成GIF"""
-        MAX_FRAMES = 600
 
         try:
             with io.BytesIO(zip_data) as zip_buffer:
@@ -541,7 +539,7 @@ class PixivSubscriptionManager:
                     # 获取并排序帧文件
                     frame_files = sorted(
                         [f for f in zip_file.namelist() if f.endswith(('.jpg', '.png'))]
-                    )[:MAX_FRAMES]
+                    )[:UGORIA_MAX_FRAMES]
 
                     if not frame_files:
                         return b""
@@ -571,6 +569,7 @@ class PixivSubscriptionManager:
 
                     # 合成GIF
                     gif_buffer = io.BytesIO()
+                    # webp在手机端可能显示为静态图片, 默认情况下请选择GIF格式, 但是GIF的体积通常较大
                     if UGOIRA_IMAGE_MODE.upper() == 'WEBP':
                         images[0].save(
                             gif_buffer,
@@ -602,7 +601,7 @@ class PixivSubscriptionManager:
         return b""
 
     async def download_ugoira_as_gif_base64(self, illust) -> str:
-        """主方法：下载Ugoira ZIP，合成GIF，转为base64"""
+        """下载Ugoira ZIP，合成GIF，转为base64"""
         illust_id = illust.get('id')
         if not illust_id:
             return ""
@@ -779,7 +778,8 @@ async def list_subscriptions(bot, ev: CQEvent):
     if not subscriptions:
         await bot.send(ev, "当前群没有订阅任何画师")
         return
-    # todo
+
+    # todo 这里会大量调用api, 需要优化
     # 构建列表：为每个 user_id 获取名字
     sub_list = []
     for user_id in subscriptions:
