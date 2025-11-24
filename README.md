@@ -18,7 +18,7 @@
 
 ## 更新记录
 - **2025.11.24 添加图片扰动避免风控, 添加带合并转发模式的多图发送, 添加发送GIF的逻辑**
-  - 感谢 @Virgo41 提交的 PR #3
+  - 感谢 [@Virgo41](https://github.com/Virgo41) 提交的 PR [#3](https://github.com/GaryDu0123/pixiv-subscription/pull/3)
   - 修改了 `pixiv_tools.py`, `config.py`, `pixiv.py` 文件, 新增 `utils.py` 文件
 - **2025.11.23 给排行榜功能添加频率限制**
   - 修改了 `pixiv_tools.py`, `config.py` 文件
