@@ -8,6 +8,9 @@ MAX_DISPLAY_WORKS = 3
 # 注意: original质量的图片体积较大，可能导致发送失败
 IMAGE_QUALITY = 'large'
 
+# 是否启用“轻微修改图片像素以避免被判重复图片”的功能
+ENABLE_PIXEL_NOISE = True
+
 CHECK_INTERVAL_HOURS = 3  # 检查更新的时间间隔，单位为小时
 
 PGET_DAILY_LIMIT = 10  # 单用户pixiv获取插画命令每日获取作品的上限
@@ -24,3 +27,9 @@ RANK_LIMIT = 5  # 每次推送排行榜时最多展示的作品数量
 # 开启后，各群管理员才能通过指令选择是否接收推送
 # 出于隐私和性能考虑，默认关闭
 ENABLE_FOLLOWING_SUBSCRIPTION = False
+
+# 发送的动图的文件格式, 可选值: 'GIF', 'WEBP', WEBP格式在手机上可能是静态的
+UGOIRA_IMAGE_MODE = "GIF"
+
+# 发送的动图的文件大小限制, 单位: MB, 超过限制将不发送动图而改为发送静态封面图
+UGOIRA_IMAGE_SIZE_LIMIT = 30

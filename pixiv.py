@@ -9,13 +9,14 @@ import nonebot
 from hoshino import Service, priv
 from hoshino.typing import CQEvent
 from pixivpy3 import AppPixivAPI
-from .config import PROXY_URL, MAX_DISPLAY_WORKS, IMAGE_QUALITY, CHECK_INTERVAL_HOURS, ENABLE_FOLLOWING_SUBSCRIPTION
+from .config import PROXY_URL, MAX_DISPLAY_WORKS, IMAGE_QUALITY, CHECK_INTERVAL_HOURS, ENABLE_FOLLOWING_SUBSCRIPTION, \
+    ENABLE_PIXEL_NOISE, UGOIRA_IMAGE_MODE, UGOIRA_IMAGE_SIZE_LIMIT
 import aiohttp
 import zipfile
 import io
 from PIL import Image  # 新增：用于GIF合成
 import random
-import uuid
+from .utils import send_to_group
 
 # 插件配置
 PIXIV_REFRESH_TOKEN_PATH = os.path.join(os.path.dirname(__file__), 'refresh-token.json')
@@ -42,6 +43,45 @@ HELP_TEXT = """
 # 创建服务
 sv = Service('pixiv-subscription', help_=HELP_TEXT, enable_on_default=True)
 
+
+def tweak_pil_image(img: Image.Image) -> Image.Image:
+    """
+    轻微修改图片的一个像素，让同一张图的字节流不完全相同。
+
+    """
+    try:
+        if img.mode not in ("RGB", "RGBA", "P"):
+            return img
+
+        # 做一个拷贝，避免调用方原对象被部分修改
+        new_img = img.copy()
+        pixels = new_img.load()
+        if pixels is None:
+            return img
+
+        width, height = new_img.size
+        if width <= 0 or height <= 0:
+            return img
+
+        x = random.randint(0, width - 1)
+        y = random.randint(0, height - 1)
+
+        if new_img.mode in ("RGB", "RGBA"):
+            px = pixels[x, y]
+            if new_img.mode == "RGB":
+                r, g, b = px
+                pixels[x, y] = ((r + 1) % 256, g, b)
+            else:
+                r, g, b, a = px
+                pixels[x, y] = ((r + 1) % 256, g, b, a)
+        elif new_img.mode == "P":
+            val = pixels[x, y]
+            pixels[x, y] = (val + 1) % 256
+
+        return new_img
+    except Exception as e:
+        sv.logger.error(f"修改图片像素失败: {e}")
+        return img
 
 class PixivSubscriptionManager:
     def __init__(self):
@@ -392,10 +432,9 @@ class PixivSubscriptionManager:
             sv.logger.error(f"获取Pixiv关注作品时发生未知异常: {e}")
             return []  # 确保任何未知异常都返回一个安全的空列表
 
-
     @staticmethod
     async def download_image_as_base64(url: str) -> str:
-        """下载图片并转换为base64编码"""
+        """下载图片并转换为base64编码（可选进行轻微像素修改）"""
         try:
             headers = {
                 'Referer': 'https://www.pixiv.net/',
@@ -407,181 +446,219 @@ class PixivSubscriptionManager:
                     timeout=aiohttp.ClientTimeout(total=30)
             ) as session:
                 async with session.get(url, proxy=PROXY_URL) as resp:
-                    # 对图片数据进行处理，确保图相同数据不同，以防被屏蔽
-                    if resp.status == 200:
-                        # todo 图片处理部分
-                        image_data = await resp.read()
-                        # 生成随机不重复数据（这里用作种子）
-                        random.seed(str(uuid.uuid4()))  # 确保不重复
-
-                        # 使用 PIL 修改像素
-                        img_buffer = io.BytesIO(image_data)
-                        img = Image.open(img_buffer)
-                        pixels = img.load()
-                        width, height = img.size
-                        # 随机修改右下角像素（例如改变红色通道 +1）
-                        x, y = random.randint(0, width-1), random.randint(0, height-1)
-                        r, g, b = pixels[x, y][:3]  # 假设 RGB
-                        pixels[x, y] = (r + 1 % 256, g, b)  # 微调
-
-                        # 保存回缓冲区
-                        output_buffer = io.BytesIO()
-                        img.save(output_buffer, format=img.format)
-                        modified_data = output_buffer.getvalue()
-
-                        b64_data = base64.b64encode(modified_data).decode('utf-8')
-                        return b64_data
-                    else:
+                    if resp.status != 200:
                         sv.logger.error(f"下载图片失败, HTTP {resp.status}: {url}")
+                        return ""
+
+                    raw_data = await resp.read()
+
+                    # 如果禁用了图片修改，直接返回原图base64
+                    if not ENABLE_PIXEL_NOISE:
+                        return base64.b64encode(raw_data).decode("utf-8")
+
+                    # 进行轻微像素修改防止风控
+                    try:
+                        img = Image.open(io.BytesIO(raw_data))
+                        mutated = tweak_pil_image(img)
+                        buf = io.BytesIO()
+                        fmt = mutated.format or img.format or "PNG"
+                        mutated.save(buf, format=fmt)
+                        processed_bytes = buf.getvalue()
+                    except Exception as e:
+                        sv.logger.error(f"图片处理异常: {e}, URL: {url}")
+                        processed_bytes = raw_data
+                    return base64.b64encode(processed_bytes).decode("utf-8")
 
         except Exception as e:
             sv.logger.error(f"下载图片异常: {e}, URL: {url}")
-
-        return ""
-
-    @staticmethod
-    def get_image_urls(illust: dict) -> str:
-        # todo 图片解析需要处理original
-        """获取作品的所有图片URL（正确处理单页和多页）"""
-        urls = []
-
-        page_count = illust.get('page_count', 1)
-
-        if page_count > 1:
-            # 多页作品：从 meta_pages 中提取每个页面的 original URL
-            meta_pages = illust.get('meta_pages', [])
-            for page in meta_pages:
-                image_urls = page.get('image_urls', {})
-                original_url = image_urls.get('original')  # 或 'large' / 'medium'
-                if not original_url:
-                    original_url = image_urls.get('large')
-                if original_url:
-                    urls.append(original_url)
-        else:
-            # 单页作品：从 meta_single_page 中提取 original_image_url
-            meta_single_page = illust.get('meta_single_page', {})
-            original_url = meta_single_page.get('original_image_url')
-            if original_url:
-                urls.append(original_url)
-
-        if not urls:
-            sv.logger.error(f"未找到任何图片URL for illust {illust.get('id')}. Illust data: {illust}")  # 添加调试日志
-
-        return urls  # 返回列表，即使单张也是 [url]
-
-    # 新方法：下载Ugoira并合成GIF base64
-    async def download_ugoira_as_gif_base64(self, illust) -> str:
-        """下载Ugoira ZIP，合成GIF，转为base64"""
-        MAX_FRAMES = 600  # 限制最大帧数，防止GIF过大
-        illust_id = illust.get('id')
-        if not illust_id:
-            sv.logger.error("未找到 illust_id")
             return ""
 
+    @staticmethod
+    def get_image_urls(illust: dict) -> List[str]:
+        """
+        获取作品的所有图片URL,
+        """
+        urls: List[str] = []
+        page_count = illust.get('page_count', 1)
+
+        def get_image_url(image_urls: dict) -> str:
+            """
+            根据 IMAGE_QUALITY 获取单张图片URL的辅助函数
+            """
+            if not image_urls:
+                return ""
+            check_order = [IMAGE_QUALITY, 'large', 'medium', 'square_medium']
+
+            for quality in check_order:
+                u = image_urls.get(quality)
+                if u:
+                    return u
+            return ""
+
+        if page_count > 1:
+            # 多图情况下, 从 meta_pages 中逐页获取
+            meta_pages = illust.get('meta_pages') or []
+            for page in meta_pages:
+                url = get_image_url(page.get('image_urls', {}))
+                if url:
+                    urls.append(url)
+        else:
+            # 单页, 图片信息在 meta_single_page
+            meta_single_page = illust.get('meta_single_page', {})
+            url = meta_single_page.get('original_image_url')
+            if url:
+                urls.append(url)
+        return urls
+
+    # 新方法：下载Ugoira并合成GIF base64
+    # 下载Ugoira并合成GIF base64
+    @staticmethod
+    async def _download_ugoira_zip(zip_url: str) -> bytes:
+        """辅助方法：下载Ugoira的ZIP文件"""
+        headers = {
+            'Referer': 'https://www.pixiv.net/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         try:
-            # 调用 Pixiv API 获取 Ugoira 元数据（同步调用，无 await）
-            metadata = self.api.ugoira_metadata(illust_id)
-            if not metadata or 'ugoira_metadata' not in metadata:
-                sv.logger.error(f"获取 Ugoira 元数据失败 for illust {illust_id}")
-                return ""
-
-            zip_urls = metadata['ugoira_metadata'].get('zip_urls', {})
-            zip_url = zip_urls.get('medium') # 优先 medium 分辨率（较小），或 original
-            if not zip_url or not zip_url.endswith('.zip'):
-                sv.logger.error(f"无效的 Ugoira ZIP URL: {zip_url}")
-                # 回退：下载第一帧作为静态图片
-                fallback_url = illust.get('meta_single_page', {}).get('original_image_url')
-                if fallback_url:
-                    b64_data = await self.download_image_as_base64(fallback_url)  # 使用现有下载方法
-                    return b64_data if b64_data else ""
-                return ""
-
-            # 下载 ZIP
-            headers = {
-                'Referer': 'https://www.pixiv.net/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
             async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as session:
                 async with session.get(zip_url, proxy=PROXY_URL) as resp:
                     if resp.status != 200:
                         sv.logger.error(f"下载Ugoira ZIP失败, HTTP {resp.status}: {zip_url}")
-                        return ""
-
-                    zip_data = await resp.read()
-                    with io.BytesIO(zip_data) as zip_buffer:
-                        with zipfile.ZipFile(zip_buffer) as zip_file:
-                            # 提取元数据（延迟）从 API 返回中取
-                            frames_info = metadata['ugoira_metadata'].get('frames', [])[:MAX_FRAMES]
-
-                            # 提取帧
-                            images = []
-                            durations = []
-                            frame_files = sorted([f for f in zip_file.namelist() if f.endswith(('.jpg', '.png'))])[:MAX_FRAMES]
-                            for i, frame in enumerate(frame_files):
-                                with zip_file.open(frame) as frame_file:
-                                    img = Image.open(io.BytesIO(frame_file.read()))
-                                    images.append(img)
-                                durations.append(frames_info[i]['delay'] if i < len(frames_info) else 100)  # 默认100ms
-
-                            if not images:
-                                sv.logger.error("未提取到Ugoira帧")
-                                return ""
-
-                            # 对gif轻微修改像素（确保字节流不重复），以防屏蔽
-                            try:
-                                # 生成随机不重复种子（使用 UUID）
-                                random.seed(str(uuid.uuid4()))
-
-                                # 随机选择一帧进行修改
-                                frame_to_modify = random.randint(0, len(images) - 1)
-                                img_to_modify = images[frame_to_modify]
-
-                                # 获取像素访问器
-                                pixels = img_to_modify.load()
-                                width, height = img_to_modify.size
-
-                                # 随机选择一个像素位置（优先边缘）
-                                x = random.randint(0, width - 1)
-                                y = random.randint(0, height - 1)
-
-                                # 假设 RGB/RGBA 模式，微调一个通道（例如红色 +1，循环到 0-255）
-                                if img_to_modify.mode in ('RGB', 'RGBA'):
-                                    r, g, b = pixels[x, y][:3]
-                                    pixels[x, y] = ((r + 1) % 256, g, b) + pixels[x, y][3:]  # 保持 alpha 如果有
-                                elif img_to_modify.mode == 'P':  # 调色板模式，微调索引
-                                    pixel_value = pixels[x, y]
-                                    pixels[x, y] = (pixel_value + 1) % 256
-                                else:
-                                    # 其他模式：跳过修改
-                                    sv.logger.warning(f"跳过像素修改：不支持的图像模式 {img_to_modify.mode}")
-                                    pass
-
-                                # 更新回列表
-                                images[frame_to_modify] = img_to_modify
-
-                                sv.logger.info(f"已修改帧 {frame_to_modify} 的像素 ({x}, {y}) 以确保字节流唯一")
-                            except Exception as e:
-                                sv.logger.error(f"像素修改失败: {e}，使用原始帧")
-                                # 回退：不修改，继续使用原始 images
-
-                            # 合成GIF（无限循环）
-                            gif_buffer = io.BytesIO()
-                            images[0].save(gif_buffer, format='GIF', save_all=True, append_images=images[1:], duration=durations, loop=0)
-                            gif_bytes = gif_buffer.getvalue()
-                            if len(gif_bytes) > 20 * 1024 * 1024:  # 大于20MB则回退到第一帧
-                                sv.logger.warning("GIF太大，无法发送")
-                                first_frame_bytes = io.BytesIO()
-                                images[0].save(first_frame_bytes, format='JPEG')
-                                return base64.b64encode(first_frame_bytes.getvalue()).decode('utf-8')
-
-                            return base64.b64encode(gif_bytes).decode('utf-8')
-        except zipfile.BadZipFile as e:
-            sv.logger.error(f"ZIP文件无效: {e}, URL: {zip_url}")
-            return ""  # 或回退到静态
+                        return b""
+                    return await resp.read()
         except Exception as e:
-            sv.logger.error(f"处理Ugoira异常: {e}, illust_id: {illust_id}")
+            sv.logger.error(f"下载ZIP网络异常: {e}, URL: {zip_url}")
+            return b""
+
+    @staticmethod
+    def _process_ugoira_zip_to_gif(zip_data: bytes, frames_info: list) -> bytes:
+        """辅助方法：解压ZIP并合成GIF"""
+        MAX_FRAMES = 600
+
+        try:
+            with io.BytesIO(zip_data) as zip_buffer:
+                with zipfile.ZipFile(zip_buffer) as zip_file:
+                    # 获取并排序帧文件
+                    frame_files = sorted(
+                        [f for f in zip_file.namelist() if f.endswith(('.jpg', '.png'))]
+                    )[:MAX_FRAMES]
+
+                    if not frame_files:
+                        return b""
+
+                    images: List[Image.Image] = []
+                    durations: List[int] = []
+
+                    # 读取所有帧
+                    for i, frame_name in enumerate(frame_files):
+                        with zip_file.open(frame_name) as frame_file:
+                            img = Image.open(io.BytesIO(frame_file.read()))
+                            images.append(img)
+                        # 获取这一帧的持续时间
+                        duration = frames_info[i]['delay'] if i < len(frames_info) else 100
+                        durations.append(duration)
+
+                    # 像素修改防止图片被夹
+                    if ENABLE_PIXEL_NOISE:
+                        try:
+                            if images:
+                                frame_idx = random.randint(0, len(images) - 1)
+                                images[0] = tweak_pil_image(images[0])
+                                images[frame_idx] = tweak_pil_image(images[frame_idx])
+                                sv.logger.info(f"已修改Ugoira帧 {frame_idx} 的像素")
+                        except Exception as e:
+                            sv.logger.error(f"Ugoira像素修改失败: {e}")
+
+                    # 合成GIF
+                    gif_buffer = io.BytesIO()
+                    if UGOIRA_IMAGE_MODE.upper() == 'WEBP':
+                        images[0].save(
+                            gif_buffer,
+                            format='WEBP',
+                            save_all=True,
+                            append_images=images[1:],
+                            duration=durations,
+                            loop=0,
+                            quality=90,
+                            method=1
+                        )
+                    else:
+                        images[0].save(
+                            gif_buffer,
+                            format='GIF',
+                            save_all=True,
+                            append_images=images[1:],
+                            duration=durations,
+                            loop=0
+                        )
+
+                    return gif_buffer.getvalue()
+
+        except zipfile.BadZipFile:
+            sv.logger.error("ZIP文件损坏")
+        except Exception as e:
+            sv.logger.error(f"GIF合成过程异常: {e}")
+
+        return b""
+
+    async def download_ugoira_as_gif_base64(self, illust) -> str:
+        """主方法：下载Ugoira ZIP，合成GIF，转为base64"""
+        illust_id = illust.get('id')
+        if not illust_id:
             return ""
 
+        # 获取pixiv动图元数据
+        try:
+            metadata = await self.__exec_and_retry_with_login(
+                self.api.ugoira_metadata,
+                illust_id
+            )
+        except Exception as e:
+            sv.logger.error(f"获取 Ugoira 元数据异常: {e}")
+            return ""
+
+        if not metadata or 'ugoira_metadata' not in metadata:
+            sv.logger.error(f"获取 Ugoira 元数据失败: {illust_id}")
+            return ""
+
+        u_meta = metadata['ugoira_metadata']
+        zip_urls = u_meta.get('zip_urls', {})
+        zip_url = zip_urls.get('medium') or zip_urls.get('original')
+
+        # 检查URL有效性，无效则回退到静态图
+        if not zip_url or not zip_url.endswith('.zip'):
+            sv.logger.error(f"无效的 Ugoira ZIP URL: {zip_url}")
+            fallback_url = illust.get('meta_single_page', {}).get('original_image_url')
+            if fallback_url:
+                return await self.download_image_as_base64(fallback_url)
+            return ""
+
+        # 下载ZIP
+        zip_data = await self._download_ugoira_zip(zip_url)
+        if not zip_data:
+            return ""
+
+        # 在线程池中处理图像合成, 避免阻塞事件循环
+        frames_info = u_meta.get('frames') or []
+        gif_bytes = await asyncio.get_event_loop().run_in_executor(
+            None,
+            self._process_ugoira_zip_to_gif,
+            zip_data,
+            frames_info
+        )
+
+        if not gif_bytes:
+            return ""
+
+        # 检查大小限制
+        if len(gif_bytes) > UGOIRA_IMAGE_SIZE_LIMIT * 1024 * 1024:
+            sv.logger.warning(f"GIF太大 ({len(gif_bytes) / 1024 / 1024:.2f}MB)，回退到第一帧静态图")
+            fallback_url = illust.get('meta_single_page', {}).get('original_image_url')
+            if fallback_url:
+                return await self.download_image_as_base64(fallback_url)
+            return ""
+
+        return base64.b64encode(gif_bytes).decode('utf-8')
 
     @staticmethod
     def is_auth_error(exception) -> bool:
@@ -845,8 +922,6 @@ async def show_group_settings(bot, ev: CQEvent):
 
     await bot.send(ev, msg)
 
-# todo pget 被移动到了pixivtools中
-
 
 @sv.on_prefix('pixiv强制检查')
 async def force_check_updates(bot, ev: CQEvent):
@@ -865,146 +940,93 @@ async def force_check_updates(bot, ev: CQEvent):
         sv.logger.error(f"强制检查更新时出错: {e}")
         await bot.send(ev, f"❌ 检查更新时出现错误: {e}")
 
-#更新支持多图输出和动图输出，图片数量多于20则分批发送，保证每次消息的图片数量最多为20
-async def construct_group_message(bot, group_id: int, artist_name: str, filtered_illusts: List[Dict]) -> str:
+
+async def construct_group_messages(artist_name: str, filtered_illusts: List[Dict]) -> List[str]:
     """
-    构建并分条发送群消息。如果图片总数超过限制，会自动分割成多条消息。
-    函数会自己处理发送逻辑，并返回一个空字符串以防止上层重复发送。
+    为每批作品构建消息列表，其中每个作品（illust）对应列表中的一个字符串元素。
+    - 每个作品的文字描述和其所有图片（或动图）被合并到同一个消息字符串中。
+    - 每个作品最多展示 MAX_DISPLAY_WORKS 张图片。
+    - 返回一个消息字符串列表，每个字符串代表一个完整的作品推送。
     """
-    MAX_IMAGES_PER_MESSAGE = 20  # 每条消息的最大图片数
-    MAX_IMAGES_PER_ILLUST = 20   # 每个作品最多显示的图片数（防止单个作品图片过多）
+    all_messages = []
+    # 对作品按ID升序排序，确保推送时是正序的
 
-    messages_to_send = []        # 最终要发送的消息列表
-    current_msg_parts = []       # 当前正在构建的消息部分
-    image_count_in_current_msg = 0 # 当前消息中的图片计数
-    part_index = 1               # 分页索引
-
-    # 初始化第一条消息的头部
-    header = f"🎨 {artist_name} 有新作品更新！"
-    current_msg_parts.append(header)
-
-    total_illusts_to_show = filtered_illusts[:MAX_DISPLAY_WORKS]
-
-    for i, illust in enumerate(total_illusts_to_show):
+    for illust in filtered_illusts:
+        illust_id = illust.get('id', 'N/A')
         title = illust.get('title', '无标题')
-        tags = [tag.get('name', '') for tag in illust.get('tags', [])[:3] if tag.get('name')]
+        tags = [tag.get('name', '') for tag in illust['tags'][:3] if tag.get('name')]
+        # link = f"https://www.pixiv.net/artworks/{illust_id}"
 
-        illust_info_parts = [f"\n\n📖 {title}"]
-        if tags:
-            illust_info_parts.append(f"\n🏷️ {', '.join(tags)}")
+        # 构建基础文本消息
+        message = (
+            f"🎨 {artist_name} 有新作品更新！\n"
+            f"📖 {title}\n"
+            # f"ID: {illust_id}\n"
+            f"🏷️ {', '.join(tags)}"
+            # f"链接: {link}"
+        )
 
-        illust_type = illust.get('type', 'illust')
-
-        # 预先获取图片URL或处理动图
-        image_b64_list = []
-        is_ugoira_failed = False
-
-        if illust_type == 'ugoira':
-            b64_gif = await manager.download_ugoira_as_gif_base64(illust)
-            if b64_gif:
-                image_b64_list.append(b64_gif)
-            else:
-                is_ugoira_failed = True
-        else:
-            image_urls = manager.get_image_urls(illust)
-            if image_urls:
-                # 限制单个作品的图片数量
-                urls_to_download = image_urls[:MAX_IMAGES_PER_ILLUST]
-                if len(image_urls) > MAX_IMAGES_PER_ILLUST:
-                    illust_info_parts.append(f"\n（作品共 {len(image_urls)} 张图，仅显示前 {MAX_IMAGES_PER_ILLUST} 张）")
-
-                for url in urls_to_download:
-                    b64_data = await manager.download_image_as_base64(url)
-                    if b64_data:
-                        image_b64_list.append(b64_data)
-
-        # 检查在添加此作品前是否需要分割消息
-        # 如果当前消息加上新作品的图片会超限，则先发送当前消息
-        if image_count_in_current_msg > 0 and (image_count_in_current_msg + len(image_b64_list)) > MAX_IMAGES_PER_MESSAGE:
-            if part_index > 0: # part_index从1开始，所以总是>0
-                 current_msg_parts.append(f"\n\n（第 {part_index} 部分，请继续查收）")
-            messages_to_send.append(''.join(current_msg_parts))
-            part_index += 1
-            # 重置下一条消息
-            current_msg_parts = [f"{header} (续)"]
-            image_count_in_current_msg = 0
-
-        # 将作品信息添加到当前消息
-        current_msg_parts.extend(illust_info_parts)
-
-        # 处理图片和错误信息
-        if is_ugoira_failed:
-            current_msg_parts.append("\n❌ 无法合成Ugoira动图")
-
-        if not image_b64_list and illust_type != 'ugoira':
-             current_msg_parts.append("\n❌ 图片下载失败或未找到URL")
-        else:
-            for b64_data in image_b64_list:
-                # 在添加每张图片前再次检查是否需要分割（应对单个作品图片超多的情况）
-                if image_count_in_current_msg >= MAX_IMAGES_PER_MESSAGE:
-                    if part_index > 0:
-                        current_msg_parts.append(f"\n\n（第 {part_index} 部分，请继续查收）")
-                    messages_to_send.append(''.join(current_msg_parts))
-                    part_index += 1
-                    current_msg_parts = [f"{header} (续)"]
-                    image_count_in_current_msg = 0
-
-                current_msg_parts.append(f"\n[CQ:image,file=base64://{b64_data}]")
-                image_count_in_current_msg += 1
-
-    # 添加末尾提示
-    if len(filtered_illusts) > MAX_DISPLAY_WORKS:
-        current_msg_parts.append(f"\n\n...还有 {len(filtered_illusts) - MAX_DISPLAY_WORKS} 个新作品未展示。")
-
-    # 将最后构建的消息添加到待发送列表
-    if current_msg_parts:
-        if part_index > 1:
-            current_msg_parts.append(f"\n\n（第 {part_index} 部分，结束）")
-        messages_to_send.append(''.join(current_msg_parts))
-
-    for msg in messages_to_send:
+        # 获取并处理该作品的所有媒体内容
         try:
-            await bot.send_group_msg(group_id=group_id, message=msg, timeout=120) # 增加超时
-            await asyncio.sleep(1)  # 避免风控
-        except Exception as e:
-            sv.logger.error(f"向群 {group_id} 发送分片消息失败: {e}")
+            illust_type = illust.get('type')
+            if illust_type == 'ugoira':
+                b64_content = await manager.download_ugoira_as_gif_base64(illust)
+                if b64_content:
+                    message += f"\n[CQ:image,file=base64://{b64_content}]"
 
-    # 返回空字符串，防止上层代码重复发送
-    return ""
+            elif illust_type == 'illust':
+                image_urls = manager.get_image_urls(illust)
+                urls_to_download = image_urls[:MAX_DISPLAY_WORKS]
+
+                for img_url in urls_to_download:
+                    b64_content = await manager.download_image_as_base64(img_url)
+                    if b64_content:
+                        message += f"\n[CQ:image,file=base64://{b64_content}]"
+                    await asyncio.sleep(0.5)  # 避免请求过快
+
+                # 如果图片被截断，在末尾添加提示
+                if len(image_urls) > MAX_DISPLAY_WORKS:
+                    message += f"该作品共有 {len(image_urls)} 张图片，仅展示前 {MAX_DISPLAY_WORKS} 张。"
+        except Exception as e:
+            sv.logger.error(f"处理作品 {illust_id} 的媒体时出错: {e}")
+            message += "\n(图片处理失败，请查看后台日志)"
+        # 将构建完成的单个作品消息添加到最终列表中
+        all_messages.append(message.strip())
+        await asyncio.sleep(0.5)  # 避免请求过快
+    return all_messages
+
 
 #调整更新发送方式以适应多图分割发送
-async def process_and_send_updates(bot, user_id: str, artist_name: str, new_illusts: List[Dict], target_group_ids: set):
+async def process_and_send_updates(bot, user_id: str, artist_name: str,
+                                  new_illusts: List[Dict], target_group_ids: set):
     """
-    一个辅助函数, 负责处理单个画师的更新并发送给所有目标群组。
-    发送单个画师的新作, 为每个群组每个独立过滤作品、构造消息并发送。
-
-    :param bot: Bot实例
-    :param user_id: 画师ID
-    :param artist_name: 画师名字
-    :param new_illusts: 该画师的新作品列表
-    :param target_group_ids: 需要被通知的群组ID集合
+    处理单个画师的更新并发送给所有目标群组。
+    根据每个群的设置过滤作品，再构造多条消息逐条发送。
     """
+    # 如果没有新作品，直接返回
     if not new_illusts:
-        return  # 如果没有新作品，直接返回
+        return
 
-    # 向所有订阅了该画师的群组发送消息（根据群设置过滤内容）
     for group_id in target_group_ids:
         try:
-            # 根据群设置过滤作品
+            # 针对每个群组，独立过滤作品
             filtered_illusts = [
                 illust for illust in new_illusts if manager.is_illust_allowed(illust, group_id)
             ]
-
-            # 如果过滤后没有符合条件的作品，则跳过这个群
             if not filtered_illusts:
                 continue
 
-            await bot.send_group_msg(
-                group_id=int(group_id),
-                message=await construct_group_message(artist_name, filtered_illusts)
-            )
-            # 避免发送消息过快被限制
-            await asyncio.sleep(1)
+            # 构造所有消息内容
+            messages_to_send = await construct_group_messages(artist_name, filtered_illusts)
+
+            # 如果时间窗口内单画师作品过多，合并发送
+            if len(filtered_illusts) > 3:
+                await send_to_group(bot, group_id, messages_to_send)
+            else:
+                # 逐条发送
+                for msg in messages_to_send:
+                    await bot.send_group_msg(group_id=int(group_id), message=msg)
+                    await asyncio.sleep(2)  # 防风控延时
 
         except Exception as e:
             sv.logger.error(f"向群 {group_id} 发送画师 {user_id} ({artist_name}) 更新消息时出错: {e}")

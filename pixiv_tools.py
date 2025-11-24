@@ -7,7 +7,7 @@ from hoshino import Service, priv
 from hoshino.typing import CQEvent
 from .pixiv import manager
 from hoshino.config import NICKNAME
-from typing import List
+from .utils import send_messages
 from hoshino.util import DailyNumberLimiter, FreqLimiter
 from .config import MAX_DISPLAY_WORKS
 try:
@@ -42,41 +42,6 @@ sv = Service(
     help_=HELP,
     enable_on_default=False
 )
-
-
-async def send_messages(bot, ev: CQEvent, messages: List[str]):
-    """
-    通用消息发送函数, 根据 CHAIN_REPLY 配置决定发送方式.
-    - True:  将消息列表以合并转发的形式发送.
-    - False: 将消息列表逐条发送, 每条之间有2秒延迟.
-    """
-    if CHAIN_REPLY:
-        # 合并转发的节点
-        forward_nodes = [
-            {
-                "type": "node",
-                "data": {
-                    "name": str(NICKNAME[0] if NICKNAME else "Bot"),
-                    "user_id": str(ev.self_id),
-                    "content": str(msg)
-                }
-            }
-            for msg in messages
-        ]
-
-        if hasattr(ev, 'group_id') and ev.group_id:
-            await bot.send_group_forward_msg(group_id=ev.group_id, messages=forward_nodes)
-        else:
-            # Fallback, send sequentially
-            for msg in messages:
-                await bot.send(ev, msg)
-                await asyncio.sleep(2)
-    else:
-        # Sequential sending mode
-        for msg in messages:
-            await bot.send(ev, msg)
-            # Add delay to avoid messages being sent too quickly and triggering risk control
-            await asyncio.sleep(2)
 
 
 async def send_ranking(bot, ev: CQEvent, mode: str, title: str):
@@ -242,14 +207,17 @@ async def original_ranking(bot, ev: CQEvent):
 
 @sv.on_prefix('pixiv获取插画', 'pget')
 async def fetch_illust(bot, ev: CQEvent):
-    """根据作品ID获取插画"""
+    """
+    根据作品ID获取插画。
+    - 支持动图(ugoira)。
+    - 当作品图片超过3张时，自动转为合并转发。
+    """
     if not pget_daily_time_limiter.check(ev.user_id):
-        return await bot.send(ev, f"❌ 获取插画的次数已达上限")
+        return await bot.send(ev, "❌ 获取插画的次数已达今日上限")
 
     input_text = ev.message.extract_plain_text().strip()
     if not input_text:
-        return await bot.send(ev,
-                              "请输入作品ID或作品链接")
+        return await bot.send(ev, "请输入作品ID或作品链接")
 
     # 尝试从URL中提取ID
     match = re.search(r'/artworks/(\d+)', input_text)
@@ -266,25 +234,60 @@ async def fetch_illust(bot, ev: CQEvent):
         return await bot.send(ev, f"作品ID {illust_id} 被吞掉啦~")
 
     # 检查作品是否允许在本群发送
-    group_id = ev.group_id
-    if not manager.is_illust_allowed(illust, group_id):
-        return await bot.send(ev, f"❌ 该作品不符合本群的设置，无法发送~")
+    if not manager.is_illust_allowed(illust, ev.group_id):
+        return await bot.send(ev, "❌ 该作品不符合本群的设置，无法发送~")
 
+    # 构建基础文本消息
     title = illust.get('title', '无标题')
-    user_info = illust.get('user')
-    artist_name = user_info['name'] if user_info else f"作品ID {illust_id}"
-    tags = illust.get('tags', [])
-    msg_parts = [f"🎨 {title}", f"🖌️ {artist_name}",  f"🏷️ {', '.join([tag.get('name', '') for tag in tags[:3] if tag.get('name')])}"]
+    artist_name = illust.get('user', {}).get('name', '未知画师')
+    tags = [tag.get('name', '') for tag in illust.get('tags', [])[:5] if tag.get('name')]
+    text_message = (
+        f"🎨 {title}\n"
+        f"🖌️ {artist_name}\n"
+        f"🏷️ {', '.join(tags)}"
+    )
 
-    image_url = manager.get_image_urls(illust)
-    if image_url:
-        b64_data = await manager.download_image_as_base64(image_url)
+    illust_type = illust.get('type')
+
+    # 处理动图
+    if illust_type == 'ugoira':
+        b64_data = await manager.download_ugoira_as_gif_base64(illust)
         if b64_data:
-            msg_parts.append(f"[CQ:image,file=base64://{b64_data}]")
+            final_message = f"{text_message}\n[CQ:image,file=base64://{b64_data}]"
+            await bot.send(ev, final_message)
         else:
-            sv.logger.error(f"图片下载失败: {image_url}")
-            return await bot.send("❌ 图片下载失败")
-    else:
-        return await bot.send("❌ 未找到图片URL")
+            await bot.send(ev, f"{text_message}\n(动图处理失败)")
+
+    # 处理静态图
+    elif illust_type == 'illust':
+        image_urls = manager.get_image_urls(illust)
+        if not image_urls:
+            return await bot.send(ev, f"{text_message}\n(未找到任何图片URL)")
+
+        page_count = len(image_urls)
+
+        # 如果图片过多，则使用合并转发
+        if page_count > 3:
+            messages_to_forward = [text_message]
+            for url in image_urls[:MAX_DISPLAY_WORKS]:
+                b64_data = await manager.download_image_as_base64(url)
+                if b64_data:
+                    messages_to_forward.append(f"[CQ:image,file=base64://{b64_data}]")
+
+            if len(image_urls) > MAX_DISPLAY_WORKS:
+                messages_to_forward.append(f"该作品共有 {len(image_urls)} 张图片，仅展示前 {MAX_DISPLAY_WORKS} 张。")
+
+            await send_messages(bot, ev, messages_to_forward)
+
+        # 否则，合并为一条消息发送
+        else:
+            message_parts = []
+            for url in image_urls:
+                b64_data = await manager.download_image_as_base64(url)
+                if b64_data:
+                    message_parts.append(f"[CQ:image,file=base64://{b64_data}]")
+
+            final_message = '\n'.join(message_parts)
+            await bot.send(ev, final_message)
     pget_daily_time_limiter.increase(ev.user_id)
-    return await bot.send(ev, '\n'.join(msg_parts))
+    return None
