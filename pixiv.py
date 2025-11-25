@@ -553,7 +553,7 @@ class PixivSubscriptionManager:
                             img = Image.open(io.BytesIO(frame_file.read()))
                             images.append(img)
                         # 获取这一帧的持续时间
-                        duration = frames_info[i]['delay'] if i < len(frames_info) else 100
+                        duration = frames_info[i]['delay'] if i < len(frames_info) else 37
                         durations.append(duration)
 
                     # 像素修改防止图片被夹
@@ -838,7 +838,7 @@ async def disable_push_following(bot, ev: CQEvent):
     manager.set_push_following(group_id, False)
     await bot.send(ev, "已关闭关注推送")
 
-@sv.on_prefix('pixiv开启r18')
+@sv.on_prefix('pixiv开启r18', 'pixiv启用r18')
 async def enable_r18(bot, ev: CQEvent):
     """开启R18内容推送 (仅管理员)"""
     if not priv.check_priv(ev, priv.ADMIN):
@@ -850,7 +850,7 @@ async def enable_r18(bot, ev: CQEvent):
     await bot.send(ev, "已开启R18内容推送")
 
 
-@sv.on_prefix('pixiv关闭r18')
+@sv.on_prefix('pixiv关闭r18', 'pixiv禁用r18', )
 async def disable_r18(bot, ev: CQEvent):
     """关闭R18内容推送 (仅管理员)"""
     if not priv.check_priv(ev, priv.ADMIN):
