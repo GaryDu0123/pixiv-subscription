@@ -17,7 +17,11 @@
 - **防刷屏**: 排行榜和画师预览默认使用合并转发消息，避免刷屏。
 
 ## 更新记录
-
+- **2025.11.25 添加图片扰动避免风控, 添加带合并转发模式的多图发送, 添加发送GIF的逻辑, 优化订阅列表显示, 添加画师名缓存**
+  - 感谢 [@Virgo41](https://github.com/Virgo41) 提交的 PR [#3](https://github.com/GaryDu0123/pixiv-subscription/pull/3)
+  - 修改了 `pixiv_tools.py`, `config.py`, `pixiv.py` 文件, 新增 `utils.py` 文件
+- **2025.11.23 给排行榜功能添加频率限制**
+  - 修改了 `pixiv_tools.py`, `config.py` 文件
 - **2025.11.18 插件拆分为 `pixiv-subscription` 和 `pixiv-tools` 两个服务**
   - 将 `pget` 命令从`pixiv-subscription` 移动到 `pixiv-tools` 服务中
   - 修改了 `pixiv.py` 文件, 新增 `pixiv_tools.py` 文件
@@ -58,6 +62,9 @@ MAX_DISPLAY_WORKS = 3
 # 注意: original质量的图片体积较大，可能导致发送失败
 IMAGE_QUALITY = 'large'
 
+# 是否启用“轻微修改图片像素以避免图片被风控”的功能
+ENABLE_PIXEL_NOISE = True
+
 CHECK_INTERVAL_HOURS = 3  # 检查更新的时间间隔，单位为小时
 
 # 单用户pixiv获取插画命令每日获取作品的上限
@@ -76,6 +83,16 @@ RANK_LIMIT = 5
 # 开启后，各群管理员才能通过指令选择是否接收推送
 # 出于隐私和性能考虑，默认关闭
 ENABLE_FOLLOWING_SUBSCRIPTION = False
+
+# 发送的动图的文件格式, 可选值: 'GIF', 'WEBP', WEBP格式在手机上可能是静态的
+# 但是GIF通常较大, 可能会超过文件大小限制导致发送失败
+UGOIRA_IMAGE_MODE = "GIF"
+
+# 发送的动图的文件大小限制, 单位: MB, 超过限制将不发送动图而改为发送静态封面图
+UGOIRA_IMAGE_SIZE_LIMIT = 30
+
+# 动图最大帧数限制
+UGORIA_MAX_FRAMES = 600
 ```
 
 ### 3. 使用`pixiv_auth.py`获取 Pixiv Refresh Token
