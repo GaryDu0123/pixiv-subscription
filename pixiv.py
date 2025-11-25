@@ -21,7 +21,7 @@ from .utils import send_to_group
 # 插件配置
 PIXIV_REFRESH_TOKEN_PATH = os.path.join(os.path.dirname(__file__), 'refresh-token.json')
 PIXIV_SUBSCRIPTION_PATH = os.path.join(os.path.dirname(__file__), 'subscriptions.json')
-
+PIXIV_ARTIST_CACHE_PATH = os.path.join(os.path.dirname(__file__), 'artist_names.json')
 
 if IMAGE_QUALITY not in ['large', 'medium', 'square_medium', 'original']:
     IMAGE_QUALITY = 'large'  # 默认值
@@ -88,10 +88,45 @@ class PixivSubscriptionManager:
         self.api = None
         self.subscriptions = self.load_subscriptions()
         self.refresh_token = self.load_refresh_token()
+        self.artist_names = self.load_artist_names()
         self.init_api()
         sv.logger.info("正在使用refresh_token登录Pixiv...")
         status, msg = self.login(self.refresh_token)
         sv.logger.info(msg)
+
+    @staticmethod
+    def load_artist_names() -> Dict[str, str]:
+        """加载画师名字缓存"""
+        if os.path.exists(PIXIV_ARTIST_CACHE_PATH):
+            try:
+                with open(PIXIV_ARTIST_CACHE_PATH, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                sv.logger.error(f"加载画师名字缓存失败: {e}")
+        return {}
+
+    def save_artist_names(self) -> None:
+        """保存画师名字缓存"""
+        try:
+            with open(PIXIV_ARTIST_CACHE_PATH, 'w', encoding='utf-8') as f:
+                json.dump(self.artist_names, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            sv.logger.error(f"保存画师名字缓存失败: {e}")
+
+    def update_artist_name(self, user_id: Union[str, int], name: str):
+        """更新单个画师的名字缓存"""
+        user_id = str(user_id)
+        if not name:
+            return
+
+        # 只有当名字不存在或者名字发生变化时才保存
+        if user_id not in self.artist_names or self.artist_names[user_id] != name:
+            self.artist_names[user_id] = name
+            self.save_artist_names()
+
+    def get_artist_name(self, user_id: Union[str, int]) -> str:
+        """获取缓存的名字，如果没有则返回None"""
+        return self.artist_names.get(str(user_id))
 
     @staticmethod
     def load_refresh_token() -> str:
@@ -286,6 +321,8 @@ class PixivSubscriptionManager:
             if 'error' in result or 'user' not in result: # 表示请求失败
                 raise ValueError(result)
             if result and result.get('user'):
+                user_data = result['user']
+                self.update_artist_name(user_data.get('id'), user_data.get('name'))
                 return result['user']
         except Exception as e:
             sv.logger.error(f"获取用户信息失败: {e}; Return response:{result}")
@@ -779,17 +816,20 @@ async def list_subscriptions(bot, ev: CQEvent):
         await bot.send(ev, "当前群没有订阅任何画师")
         return
 
-    # todo 这里会大量调用api, 需要优化
-    # 构建列表：为每个 user_id 获取名字
     sub_list = []
+
     for user_id in subscriptions:
-        user_info = await manager.get_user_info(user_id)
-        if user_info and 'name' in user_info:
-            name = user_info['name']
-            sub_list.append(f"{name}: {user_id}")
-        else:
-            sub_list.append(f"{user_id}: 未知")  # 回退，如果获取失败
-            sv.logger.warning(f"无法获取画师 {user_id} 的信息")
+        # 尝试从缓存获取
+        name = manager.get_artist_name(user_id)
+        # 如果缓存没有，调用API
+        if not name:
+            user_info = await manager.get_user_info(user_id)
+            if user_info and 'name' in user_info:
+                name = user_info['name']
+            # 延时避免请求过快
+            await asyncio.sleep(0.5)
+
+        sub_list.append(f"{name} ({user_id})")
 
     msg = "当前订阅的画师:\n"
     msg += "\n".join(sub_list)
@@ -1088,6 +1128,7 @@ async def check_updates():
         for user_id, data in bot_followed_illusts.items():
             artist_name = data['user']['name']
             new_illusts = data['illusts']
+            manager.update_artist_name(user_id, artist_name)
 
             # 计算需要通知的所有群组：订阅了该画师的 + 开启了全局关注推送的
             target_group_ids = set(artist_to_groups.get(user_id, [])) | groups_enabling_following
@@ -1107,12 +1148,14 @@ async def check_updates():
                 interval_hours=CHECK_INTERVAL_HOURS
             )
 
+            artist_name = user_info.get('name')
+            # 更新缓存的画师名称
+            manager.update_artist_name(user_id, artist_name)
+
             if not new_illusts:
                 sv.logger.info(f"画师 {user_id} 没有新作品，跳过")
                 await asyncio.sleep(3)
                 continue
-
-            artist_name = user_info.get('name', f"画师ID:{user_id}")
 
             await process_and_send_updates(bot, user_id, artist_name, new_illusts, set(group_ids))
 
