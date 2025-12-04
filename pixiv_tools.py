@@ -29,10 +29,11 @@ if isinstance(NICKNAME, str):
 HELP = '''
 [pixiv预览画师 画师ID/画师URL] 预览画师最新作品
 [pixiv获取插画|pget 作品ID/作品URL] 通过作品ID或URL获取指定作品
-[pixiv日榜] 获取插画日榜
-[pixiv男性向排行] 获取插画男性向排行榜
-[pixiv女性向排行] 获取插画女性向排行榜
+[pixiv日榜{r18}] 获取插画日榜
+[pixiv男性向排行{r18}] 获取插画男性向排行榜
+[pixiv女性向排行{r18}] 获取插画女性向排行榜
 [pixiv周榜] 获取插画周榜
+[pixivai排行{r18}] 获取插画AI排行榜
 [pixiv月榜] 获取插画月榜
 [pixiv原画榜] 获取插画原画榜
 '''.strip()
@@ -81,8 +82,8 @@ async def send_ranking(bot, ev: CQEvent, mode: str, title: str):
 
         # 下载图片并转换为Base64
         image_url = manager.get_image_urls(illust)
-        if image_url:
-            b64_data = await manager.download_image_as_base64(image_url)
+        if image_url and len(image_url) > 0:
+            b64_data = await manager.download_image_as_base64(image_url[0])
             if b64_data:
                 msg_parts.append(f"[CQ:image,file=base64://{b64_data}]")
             else:
@@ -183,13 +184,41 @@ async def get_artist_illusts(bot, ev: CQEvent):
 async def daily_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='day', title='插画日榜')
 
+@sv.on_fullmatch('pixiv日榜r18')
+async def daily_ranking(bot, ev: CQEvent):
+    if not manager.is_r18_enabled(str(ev.group_id)):
+        return await bot.send(ev, "❌ 本群不允许查看R18内容的排行榜~")
+    return await send_ranking(bot, ev, mode='day_r18', title='插画日榜')
+
 @sv.on_fullmatch('pixiv男性向排行')
 async def male_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='day_male', title='男性向排行榜')
 
+@sv.on_fullmatch('pixiv男性向排行r18')
+async def male_ranking(bot, ev: CQEvent):
+    if not manager.is_r18_enabled(str(ev.group_id)):
+        return await bot.send(ev, "❌ 本群不允许查看R18内容的排行榜~")
+    return await send_ranking(bot, ev, mode='day_male_r18', title='男性向排行榜')
+
 @sv.on_fullmatch('pixiv女性向排行')
 async def female_ranking(bot, ev: CQEvent):
     await send_ranking(bot, ev, mode='day_female', title='女性向排行榜')
+
+@sv.on_fullmatch('pixiv女性向排行r18')
+async def female_ranking(bot, ev: CQEvent):
+    if not manager.is_r18_enabled(str(ev.group_id)):
+        return await bot.send(ev, "❌ 本群不允许查看R18内容的排行榜~")
+    return await send_ranking(bot, ev, mode='day_female_r18', title='女性向排行榜')
+
+@sv.on_fullmatch('pixivai排行')
+async def female_ranking(bot, ev: CQEvent):
+    await send_ranking(bot, ev, mode='day_ai', title='AI排行榜')
+
+@sv.on_fullmatch('pixivai排行r18')
+async def female_ranking(bot, ev: CQEvent):
+    if not manager.is_r18_enabled(str(ev.group_id)):
+        return await bot.send(ev, "❌ 本群不允许查看R18内容的排行榜~")
+    return await send_ranking(bot, ev, mode='day_r18_ai', title='AI排行榜')
 
 @sv.on_fullmatch('pixiv周榜')
 async def weekly_ranking(bot, ev: CQEvent):
